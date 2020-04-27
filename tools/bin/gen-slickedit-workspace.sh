@@ -1111,7 +1111,6 @@ my_generate_project "HGSMI-GH"      "src/VBox/GuestHost/HGSMI"              --be
 if test -z "$MY_OPT_MINIMAL"; then
     my_generate_project "DnD-GH"    "src/VBox/GuestHost/DragAndDrop"        --begin-incs "include"                                          --end-includes "src/VBox/GuestHost/DragAndDrop"
 fi
-my_generate_project "OpenGL-GH"     "src/VBox/GuestHost/OpenGL"             --begin-incs "include" "src/VBox/GuestHost/OpenGL"              --end-includes "src/VBox/GuestHost/OpenGL"
 my_generate_project "ShClip-GH"     "src/VBox/GuestHost/SharedClipboard"    --begin-incs "include"                                          --end-includes "src/VBox/GuestHost/SharedClipboard"
 
 # src/VBox/HostDrivers
@@ -1127,7 +1126,6 @@ my_generate_project "DragAndDrop"   "src/VBox/HostServices/DragAndDrop"     --be
 my_generate_project "GuestProps"    "src/VBox/HostServices/GuestProperties" --begin-incs "include" "src/VBox/HostServices/GuestProperties"  --end-includes "src/VBox/HostServices/GuestProperties"
 my_generate_project "ShClip-HS"     "src/VBox/HostServices/SharedClipboard" --begin-incs "include" "src/VBox/HostServices/SharedClipboard"  --end-includes "src/VBox/HostServices/SharedClipboard"
 my_generate_project "SharedFolders" "src/VBox/HostServices/SharedFolders"   --begin-incs "include" "src/VBox/HostServices/SharedFolders"    --end-includes "src/VBox/HostServices/SharedFolders" "include/VBox/shflsvc.h"
-my_generate_project "OpenGL-HS"     "src/VBox/HostServices/SharedOpenGL"    --begin-incs "include" "src/VBox/HostServices/SharedOpenGL"     --end-includes "src/VBox/HostServices/SharedOpenGL"
 
 # src/VBox/ImageMounter
 my_generate_project "ImageMounter"  "src/VBox/ImageMounter"                 --begin-incs "include" "src/VBox/ImageMounter"                  --end-includes "src/VBox/ImageMounter"
@@ -1166,7 +1164,7 @@ my_generate_project "bldprogs"      "src/bldprogs"                          --be
 my_generate_project "zlib"          "src/libs/zlib-1.2.11"                  --begin-incs "include"                                          --end-includes "src/libs/zlib-1.2.11/*.c" "src/libs/zlib-1.2.11/*.h"
 my_generate_project "liblzf"        "src/libs/liblzf-3.4"                   --begin-incs "include"                                          --end-includes "src/libs/liblzf-3.4"
 my_generate_project "libpng"        "src/libs/libpng-1.6.36"                --begin-incs "include"                                          --end-includes "src/libs/libpng-1.6.36/*.c" "src/libs/libpng-1.6.36/*.h"
-my_generate_project "openssl"       "src/libs/openssl-1.1.1d"               --begin-incs "include" "src/libs/openssl-1.1.1d/crypto"         --end-includes "src/libs/openssl-1.1.1d"
+my_generate_project "openssl"       "src/libs/openssl-1.1.1f"               --begin-incs "include" "src/libs/openssl-1.1.1f/crypto"         --end-includes "src/libs/openssl-1.1.1f"
 my_generate_project "curl"          "src/libs/curl-7.64.0"                  --begin-incs "include" "src/libs/curl-7.64.0/include"           --end-includes "src/libs/curl-7.64.0"
 
 # webtools
