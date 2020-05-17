@@ -34,6 +34,20 @@ MY_SCRIPT_NAME="backport-merge.sh"
 . "${MY_SCRIPT_DIR}/backport-common.sh"
 
 #
+# Check that the branch is clean if first revision.
+#
+if test -n "${MY_FIRST_REV}"; then
+    MY_STATUS=`"${MY_SVN}" status -q "${MY_BRANCH_DIR}"`
+    if test -n "${MY_STATUS}"; then
+        echo "error: Branch already has changes pending..."
+        "${MY_SVN}" status -q "${MY_BRANCH_DIR}"
+        exit 1;
+    else
+        test -z "${MY_DEBUG}" || echo "debug: Found no pending changes on branch."
+    fi
+fi
+
+#
 # Do the merging.
 #
 MY_DONE_REVS=
@@ -42,7 +56,7 @@ MY_TODO_REVS=
 test -n "${MY_DEBUG}" && echo "MY_REVISIONS=${MY_REVISIONS}"
 for MY_REV in ${MY_REVISIONS};
 do
-    if test -z "${MY_FAILED}"; then
+    if test -z "${MY_FAILED_REV}"; then
         echo "***"
         echo "*** Merging r${MY_REV} ..."
         echo "***"
@@ -50,7 +64,11 @@ do
             # Check for conflict.
             MY_CONFLICTS=`"${MY_SVN}" status "${MY_BRANCH_DIR}" | "${MY_SED}" -n -e '/^C/p'`
             if test -z "${MY_CONFLICTS}"; then
-                MY_DONE_REVS="${MY_DONE_REVS} ${MY_REV}"
+                if test -z "${MY_DONE_REVS}"; then
+                    MY_DONE_REVS=${MY_REV}
+                else
+                    MY_DONE_REVS="${MY_DONE_REVS} ${MY_REV}"
+                fi
             else
                 echo '!!!'" Have conflicts after merging ${MY_REV}."
                 MY_FAILED_REV=${MY_REV}
@@ -60,7 +78,11 @@ do
             MY_FAILED_REV=${MY_REV}
         fi
     else
-        MY_TODO_REVS="${MY_TODO_REVS} ${MY_REV}"
+        if test -z "${MY_TODO_REVS}"; then
+            MY_TODO_REVS=${MY_REV}
+        else
+            MY_TODO_REVS="${MY_TODO_REVS} ${MY_REV}"
+        fi
     fi
 done
 
