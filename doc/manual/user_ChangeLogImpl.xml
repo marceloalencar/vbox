@@ -34,6 +34,343 @@ technical terms if no non-technical ones are clear enough.
 <!-- HACK ALERT! Seems we must have a single top level element for xi:include to work.
                            So, we use chapter and xpointer="xpointer(/chapter/)" with xi:include. -->
 
+  <sect1>
+    <title>Version 6.1.18 (2021-01-19)</title>
+
+    <para>This is a maintenance release. The following items were fixed
+      and/or added:</para>
+
+    <itemizedlist>
+      <listitem>
+         <para>Nested VM: Fixed hangs when executing SMP nested-guests under certain
+           conditions on Intel hosts (bug #19315, #19561)</para>
+      </listitem>
+
+      <listitem>
+         <para>OCI integration: Cloud Instance parameters parsing is improved
+            on import (bug #19156)</para>
+      </listitem>
+
+      <listitem>
+         <para>Network: UDP checksum offloading in e1000 no longer produces
+           zero checksums (bug #19930)</para>
+      </listitem>
+
+      <listitem>
+         <para>Network: Fixed Host-Only Ethernet Adapter DHCP, guest os can not
+             get IP on host resume (bug #19620)</para>
+      </listitem>
+
+      <listitem>
+         <para>NAT: Fixed mss parameter handing (bug #15256)</para>
+      </listitem>
+
+      <listitem>
+          <para>macOS host: Multiple optimizations for BigSur</para>
+      </listitem>
+
+      <listitem>
+        <para>Audio: Fixed issues with audio playback after host goes to
+          sleep (bug #18594)</para>
+      </listitem>
+
+      <listitem>
+        <para>Documentation: Some content touch-up and table formatting fixes</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux host and guest: Support kernel version 5.10 (bug
+          #20055)</para>
+      </listitem>
+
+      <listitem>
+        <para>Solaris host: Fix regression breaking VGA text mode since version 6.1.0</para>
+      </listitem>
+
+      <listitem>
+          <para>Guest Additions: Fixed a build failure affecting CentOS
+            8.2-2004 and later (bug #20091)</para>
+      </listitem>
+
+      <listitem>
+          <para>Guest Additions: Fixed a build failure affecting Linux
+	    kernels 3.2.0 through 3.2.50 (bug #20006)</para>
+      </listitem>
+
+      <listitem>
+          <para>Guest Additions: Fixed a VM segfault on copy with shared clipboard
+             with X11 (bug #19226)</para>
+      </listitem>
+
+      <listitem>
+          <para>Shared Folder: Fixed error with remounting on Linux guests</para>
+      </listitem>
+
+    </itemizedlist>
+  </sect1>
+
+  <sect1>
+    <title>Version 6.1.16 (2020-10-16)</title>
+
+    <para>This is a maintenance release. The following items were fixed
+      and/or added:</para>
+
+    <itemizedlist>
+
+      <listitem>
+        <para>VMM: Fixed random memory corruption and XMM register state
+          corruption inside the VM when Hyper-V is used (bug
+          #19695)</para>
+      </listitem>
+
+      <listitem>
+        <para>VMM: Fixed VMSVGA 3D support with Linux guests when Hyper-V
+          is used (bug #19884)</para>
+      </listitem>
+
+      <listitem>
+         <para>GUI: Fixed some Qt related crashes on macOS Big Sur</para>
+      </listitem>
+
+      <listitem>
+         <para>Oracle Cloud Infrastructure integration: Fixed network
+            integration not working behind some proxies</para>
+      </listitem>
+
+      <listitem>
+        <para>USB: Mask out remote wake capability to avoid unresponsive
+          devices</para>
+      </listitem>
+
+      <listitem>
+        <para>Audio: Fixed issues with audio playback after host goes to
+          sleep (bug #18594)</para>
+      </listitem>
+
+      <listitem>
+        <para>Serial: Keep transferring data if the status line monitoring
+          fails</para>
+      </listitem>
+
+      <listitem>
+        <para>Serial: Fixed blocking a re-connect when TCP mode is used
+          (bug #19878)</para>
+      </listitem>
+
+      <listitem>
+        <para>HPET: Fixed inability of guests to use the last timer</para>
+      </listitem>
+
+      <listitem>
+        <para>VBoxManage: Fixed detection of system locale when running
+          'VBoxManage unattended install' without --locale (bug
+          #19856)</para>
+      </listitem>
+
+      <listitem>
+        <para>macOS host: Installer on Big Sur is now reminding user that
+           system has to be rebooted to load the installed KEXTs</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux host and guest: Support kernel version 5.9 (bug
+          #19845)</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux guest: Workaround to improve resizing of 32-bit VMs
+          with VMSVGA graphics controller, and do not try to use RandR
+          version 1.3 due to bugs causing the X server to hang</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux guest: Fixed VBoxService crashing in the CPU hot-plug
+          service under certain circumstances during a CPU hot-unplug
+          event (bugs #19902 and #19903)</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux guest: Fixed Guest additions build for RHEL 8.3 beta
+          (bug #19863)</para>
+      </listitem>
+
+    </itemizedlist>
+  </sect1>
+
+  <sect1>
+    <title>Version 6.1.14 (2020-09-04)</title>
+
+    <para>This is a maintenance release. The following items were fixed and/or
+      added:</para>
+
+    <itemizedlist>
+
+      <listitem>
+        <para>GUI: Fixes file name changes in the File location field when creating Virtual Hard Disk (bug #19286)
+        </para>
+      </listitem>
+
+      <listitem>
+        <para>VMM: Fixed running VMs which failed to start with VERR_NEM_MISSING_KERNEL_API_2 when Hyper-V
+          is used (bug #19779 and #19804)</para>
+      </listitem>
+
+      <listitem>
+        <para>Audio: fix regression in HDA emulation introduced in 6.1.0</para>
+      </listitem>
+
+      <listitem>
+        <para>macOS host: Fixed webcam passthrough and audio input on Mojave and newer by requesting
+          authorization from the user (bug #19758)</para>
+      </listitem>
+
+      <listitem>
+        <para>macOS host: VBoxHeadless no longer able to start VMs (6.1.4/6.0.18 regression; bug #19706)</para>
+      </listitem>
+
+      <listitem>
+        <para>Windows host: Fixes in serial port implementation</para>
+      </listitem>
+
+      <listitem>
+        <para>Shared Clipboard: Fixed a potential crash when copying HTML data (6.1.2 regression; bug #19226)</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux host and guest: Linux kernel version 5.8 support</para>
+      </listitem>
+
+      <listitem>
+        <para>EFI: Fixed reading ISO9660 filesystems on attached media (6.1.0 regression; bug #19682)</para>
+      </listitem>
+
+      <listitem>
+        <para>EFI: Support booting from drives attached to the LsiLogic SCSI and SAS controller emulations</para>
+      </listitem>
+
+    </itemizedlist>
+  </sect1>
+
+  <sect1>
+    <title>Version 6.1.12 (2020-07-14)</title>
+
+    <para>This is a maintenance release. The following items were fixed and/or
+      added:</para>
+
+    <itemizedlist>
+
+      <listitem>
+         <para>UI: Fixed Log-Viewer search-backward icon</para>
+      </listitem>
+
+      <listitem>
+         <para>Devices: Fixes and improvements for the BusLogic SCSI controller emulation</para>
+      </listitem>
+
+      <listitem>
+         <para>Serial Port: Regression fixes in FIFO data handling</para>
+      </listitem>
+
+      <listitem>
+         <para>Oracle Cloud Infrastructure integration: Experimental new type of
+           network attachment, allowing local VM to act as if it was run in cloud</para>
+      </listitem>
+
+      <listitem>
+         <para>API: Improved resource management in the guest control functionality</para>
+      </listitem>
+
+      <listitem>
+         <para>VBoxManage: Fixed command option parsing for the "snapshot edit"
+           sub-command</para>
+      </listitem>
+
+      <listitem>
+        <para>VBoxManage: Fixed crash of 'VBoxManage internalcommands repairhd'
+          when processing invalid input (bug #19579)</para>
+      </listitem>
+
+      <listitem>
+         <para>Guest Additions, 3D: New experimental GLX graphics output</para>
+      </listitem>
+
+      <listitem>
+         <para>Guest Additions, 3D: Fixed releasing texture objects, which could cause
+             guest crashes</para>
+      </listitem>
+
+      <listitem>
+         <para>Guest Additions: Fixed writes to a file on a shared folder not being
+           reflected on the host when the file is mmap'ed and the used Linux kernel is
+           between version 4.10.0 and 4.11.x</para>
+      </listitem>
+
+      <listitem>
+         <para>Guest Additions: Fixed the shared folder driver on 32bit Windows 8 and newer
+           returning an error when flushing writes to a file which is mapped into memory under
+           rare circumstances
+         </para>
+      </listitem>
+
+      <listitem>
+        <para>Guest Additions: Improved resize coverage for VMSVGA graphics controller</para>
+      </listitem>
+
+      <listitem>
+        <para>Guest Additions: Fixed issues detecting guest additions ISO at runtime</para>
+      </listitem>
+
+      <listitem>
+        <para>Guest Additions: Fixed German translation encoding for Windows GA installer</para>
+      </listitem>
+
+    </itemizedlist>
+  </sect1>
+
+  <sect1>
+    <title>Version 6.1.10 (2020-06-05)</title>
+
+    <para>This is a maintenance release. The following items were fixed and/or
+      added:</para>
+
+    <itemizedlist>
+
+      <listitem>
+        <para>GUI: Fixed crash when using Qt on Xwayland sessions
+          (bug #19583)</para>
+      </listitem>
+
+      <listitem>
+         <para>GUI: Fixed mouse pointer doesn't work properly in Windows guests
+           when scaling is on (bug #19597)</para>
+      </listitem>
+
+      <listitem>
+        <para>VBoxManage: Fixed crash of 'VBoxManage internalcommands repairhd'
+          when processing invalid input (bug #19579)</para>
+      </listitem>
+
+      <listitem>
+        <para>Settings: disable audio input and audio output by default for new VMs
+          (bug #19527)</para>
+      </listitem>
+
+      <listitem>
+         <para>Guest Additions: Fixed resizing and multi monitor handling for
+           Wayland guests. (bug #19496)</para>
+      </listitem>
+
+      <listitem>
+        <para>Guest Additions: Fixed VBoxClient error: The parent session seems
+          to be non-X11. (bug #19590)</para>
+      </listitem>
+
+      <listitem>
+        <para>Linux host and guest: Linux kernel version 5.7 support. (bug #19516)</para>
+      </listitem>
+
+    </itemizedlist>
+  </sect1>
 
   <sect1>
     <title>Version 6.1.8 (2020-05-15)</title>
@@ -74,7 +411,7 @@ technical terms if no non-technical ones are clear enough.
 
         <listitem>
           <para>Guest Additions: Build problems fix with Oracle Linux 8.2
-	    (Red Hat compatible kernel) / Red Hat Enterprise Linux 8.2 / CentOS 8.2 (bug #19391)</para>
+            (Red Hat compatible kernel) / Red Hat Enterprise Linux 8.2 / CentOS 8.2 (bug #19391)</para>
         </listitem>
 
         <listitem>

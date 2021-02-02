@@ -55,6 +55,8 @@
 #include <iprt/assert.h>
 #include <iprt/err.h>
 #include <iprt/file.h>
+#include <iprt/mem.h>
+#include <iprt/path.h>
 #include <iprt/string.h>
 #include <iprt/thread.h>
 
@@ -64,7 +66,6 @@
 
 #define MILLIS_PER_INCH (25.4)
 #define DEFAULT_DPI (96.0)
-
 
 /** Maximum number of supported screens.  DRM and X11 both limit this to 32. */
 /** @todo if this ever changes, dynamically allocate resizeable arrays in the
@@ -127,6 +128,7 @@ struct X11CONTEXT
     int hRandREventBase;
     int hRandRErrorBase;
     int hEventMask;
+    bool fMonitorInfoAvailable;
     /** The number of outputs (monitors, including disconnect ones) xrandr reports. */
     int hOutputCount;
     void *pRandLibraryHandle;
@@ -154,10 +156,6 @@ struct X11CONTEXT
 };
 
 static X11CONTEXT x11Context;
-
-#define MAX_MODE_NAME_LEN 64
-#define MAX_COMMAND_LINE_LEN 512
-#define MAX_MODE_LINE_LEN 512
 
 struct RANDROUTPUT
 {
@@ -190,16 +188,22 @@ struct DisplayModeR {
 static void x11Connect();
 static int determineOutputCount();
 
-#define checkFunctionPtr(pFunction)                                     \
-    do{                                                                 \
-        if (!pFunction)                                                 \
-        {                                                               \
-            VBClLogFatalError("Could not find symbol address\n");       \
-            dlclose(x11Context.pRandLibraryHandle);                     \
-            x11Context.pRandLibraryHandle = NULL;                       \
-            return VERR_NOT_FOUND;                                      \
-        }                                                               \
-    }while(0)
+#define checkFunctionPtrReturn(pFunction) \
+    do { \
+        if (!pFunction) \
+        { \
+            VBClLogFatalError("Could not find symbol address (%s)\n", #pFunction); \
+            dlclose(x11Context.pRandLibraryHandle); \
+            x11Context.pRandLibraryHandle = NULL; \
+            return VERR_NOT_FOUND; \
+        } \
+    } while (0)
+
+#define checkFunctionPtr(pFunction) \
+    do { \
+        if (!pFunction) \
+            VBClLogFatalError("Could not find symbol address (%s)\n", #pFunction);\
+    } while (0)
 
 
 /** A slightly modified version of the xf86CVTMode function from xf86cvt.c
@@ -433,35 +437,35 @@ DisplayModeR f86CVTMode(int HDisplay, int VDisplay, float VRefresh /* Herz */, B
 bool VMwareCtrlSetTopology(Display *dpy, int hExtensionMajorOpcode,
                             int screen, xXineramaScreenInfo extents[], int number)
 {
-   xVMwareCtrlSetTopologyReply rep;
-   xVMwareCtrlSetTopologyReq *req;
+    xVMwareCtrlSetTopologyReply rep;
+    xVMwareCtrlSetTopologyReq *req;
 
-   long len;
+    long len;
 
-   LockDisplay(dpy);
+    LockDisplay(dpy);
 
-   GetReq(VMwareCtrlSetTopology, req);
-   req->reqType = hExtensionMajorOpcode;
-   req->VMwareCtrlReqType = X_VMwareCtrlSetTopology;
-   req->screen = screen;
-   req->number = number;
+    GetReq(VMwareCtrlSetTopology, req);
+    req->reqType = hExtensionMajorOpcode;
+    req->VMwareCtrlReqType = X_VMwareCtrlSetTopology;
+    req->screen = screen;
+    req->number = number;
 
-   len = ((long) number) << 1;
-   SetReqLen(req, len, len);
-   len <<= 2;
-   _XSend(dpy, (char *)extents, len);
+    len = ((long) number) << 1;
+    SetReqLen(req, len, len);
+    len <<= 2;
+    _XSend(dpy, (char *)extents, len);
 
-   if (!_XReply(dpy, (xReply *)&rep,
-                (SIZEOF(xVMwareCtrlSetTopologyReply) - SIZEOF(xReply)) >> 2,
-                xFalse))
-   {
-       UnlockDisplay(dpy);
-       SyncHandle();
-       return false;
-   }
-   UnlockDisplay(dpy);
-   SyncHandle();
-   return true;
+    if (!_XReply(dpy, (xReply *)&rep,
+                 (SIZEOF(xVMwareCtrlSetTopologyReply) - SIZEOF(xReply)) >> 2,
+                 xFalse))
+    {
+        UnlockDisplay(dpy);
+        SyncHandle();
+        return false;
+    }
+    UnlockDisplay(dpy);
+    SyncHandle();
+    return true;
 }
 
 /** This function assumes monitors are named as from Virtual1 to VirtualX. */
@@ -654,33 +658,124 @@ static bool callVMWCTRL(struct RANDROUTPUT *paOutputs)
 }
 
 /**
- * Tries to determine if the session parenting this process is of X11.
+ * Tries to determine if the session parenting this process is of Xwayland.
+ * NB: XDG_SESSION_TYPE is a systemd(1) environment variable and is unlikely
+ * set in non-systemd environments or remote logins.
+ * Therefore we check the Wayland specific display environment variable first.
  */
-static bool isX11()
+static bool isXwayland(void)
 {
-    char* pSessionType;
-    pSessionType = getenv("XDG_SESSION_TYPE");
-    if (pSessionType != NULL)
-    {
-        if (RTStrIStartsWith(pSessionType, "x11"))
-            return true;
+    const char *const pDisplayType = getenv("WAYLAND_DISPLAY");
+    const char *pSessionType;
+
+    if (pDisplayType != NULL) {
+        return true;
     }
+    pSessionType = getenv("XDG_SESSION_TYPE");
+    if ((pSessionType != NULL) && (RTStrIStartsWith(pSessionType, "wayland"))) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * An abbreviated copy of the VGSvcReadProp from VBoxServiceUtils.cpp
+ */
+static int readGuestProperty(uint32_t u32ClientId, const char *pszPropName)
+{
+    AssertPtrReturn(pszPropName, VERR_INVALID_POINTER);
+
+    uint32_t    cbBuf = _1K;
+    void       *pvBuf = NULL;
+    int         rc    = VINF_SUCCESS;  /* MSC can't figure out the loop */
+
+    for (unsigned cTries = 0; cTries < 10; cTries++)
+    {
+        /*
+         * (Re-)Allocate the buffer and try read the property.
+         */
+        RTMemFree(pvBuf);
+        pvBuf = RTMemAlloc(cbBuf);
+        if (!pvBuf)
+        {
+            VBClLogError("Guest Property: Failed to allocate %zu bytes\n", cbBuf);
+            rc = VERR_NO_MEMORY;
+            break;
+        }
+        char    *pszValue;
+        char    *pszFlags;
+        uint64_t uTimestamp;
+        rc = VbglR3GuestPropRead(u32ClientId, pszPropName, pvBuf, cbBuf, &pszValue, &uTimestamp, &pszFlags, NULL);
+        if (RT_FAILURE(rc))
+        {
+            if (rc == VERR_BUFFER_OVERFLOW)
+            {
+                /* try again with a bigger buffer. */
+                cbBuf *= 2;
+                continue;
+            }
+            else
+                break;
+        }
+        else
+            break;
+    }
+
+    if (pvBuf)
+        RTMemFree(pvBuf);
+    return rc;
+}
+
+/**
+ * We start VBoxDRMClient from VBoxService in case  some guest property is set.
+ * We check the same guest property here and dont start this service in case
+ * it (guest property) is set.
+ */
+static bool checkDRMClient()
+{
+   uint32_t uGuestPropSvcClientID;
+   int rc = VbglR3GuestPropConnect(&uGuestPropSvcClientID);
+   if (RT_FAILURE(rc))
+       return false;
+   rc = readGuestProperty(uGuestPropSvcClientID, "/VirtualBox/GuestAdd/DRMResize" /*pszPropName*/);
+   if (RT_FAILURE(rc))
+       return false;
+   return true;
+}
+
+static bool startDRMClient()
+{
+    char* argv[] = {NULL};
+    char* env[] = {NULL};
+    char szDRMClientPath[RTPATH_MAX];
+    RTPathExecDir(szDRMClientPath, RTPATH_MAX);
+    RTPathAppend(szDRMClientPath, RTPATH_MAX, "VBoxDRMClient");
+    VBClLogInfo("Starting DRM client.\n");
+    int rc = execve(szDRMClientPath, argv, env);
+    if (rc == -1)
+        VBClLogFatalError("execve for % returns the following error %d %s\n", szDRMClientPath, errno, strerror(errno));
+    /* This is reached only when execve fails. */
     return false;
 }
 
 static bool init()
 {
-    if (!isX11())
+    /* If DRM client is already running don't start this service. */
+    if (checkDRMClient())
     {
-        VBClLogFatalError("The parent session seems to be non-X11. Exiting...\n");
-        VBClLogInfo("This service needs X display server for resizing and multi monitor handling to work\n");
+        VBClLogFatalError("DRM resizing is already running. Exiting this service\n");
         return false;
     }
+    if (isXwayland())
+        return startDRMClient();
+
     x11Connect();
     if (x11Context.pDisplay == NULL)
         return false;
-    if (RT_FAILURE(startX11MonitorThread()))
-        return false;
+    /* don't start the monitoring thread if related randr functionality is not available. */
+    if (x11Context.fMonitorInfoAvailable)
+        if (RT_FAILURE(startX11MonitorThread()))
+            return false;
     return true;
 }
 
@@ -726,55 +821,58 @@ static int openLibRandR()
     }
 
     *(void **)(&x11Context.pXRRSelectInput) = dlsym(x11Context.pRandLibraryHandle, "XRRSelectInput");
-    checkFunctionPtr(x11Context.pXRRSelectInput);
+    checkFunctionPtrReturn(x11Context.pXRRSelectInput);
 
     *(void **)(&x11Context.pXRRQueryExtension) = dlsym(x11Context.pRandLibraryHandle, "XRRQueryExtension");
-    checkFunctionPtr(x11Context.pXRRQueryExtension);
+    checkFunctionPtrReturn(x11Context.pXRRQueryExtension);
 
     *(void **)(&x11Context.pXRRQueryVersion) = dlsym(x11Context.pRandLibraryHandle, "XRRQueryVersion");
-    checkFunctionPtr(x11Context.pXRRQueryVersion);
+    checkFunctionPtrReturn(x11Context.pXRRQueryVersion);
 
+    /* Don't bail out when XRRGetMonitors XRRFreeMonitors are missing as in Oracle Solaris 10. It is not crucial esp. for single monitor. */
     *(void **)(&x11Context.pXRRGetMonitors) = dlsym(x11Context.pRandLibraryHandle, "XRRGetMonitors");
     checkFunctionPtr(x11Context.pXRRGetMonitors);
-
-    *(void **)(&x11Context.pXRRGetScreenResources) = dlsym(x11Context.pRandLibraryHandle, "XRRGetScreenResources");
-    checkFunctionPtr(x11Context.pXRRGetScreenResources);
-
-    *(void **)(&x11Context.pXRRSetCrtcConfig) = dlsym(x11Context.pRandLibraryHandle, "XRRSetCrtcConfig");
-    checkFunctionPtr(x11Context.pXRRSetCrtcConfig);
 
     *(void **)(&x11Context.pXRRFreeMonitors) = dlsym(x11Context.pRandLibraryHandle, "XRRFreeMonitors");
     checkFunctionPtr(x11Context.pXRRFreeMonitors);
 
+    x11Context.fMonitorInfoAvailable = x11Context.pXRRGetMonitors && x11Context.pXRRFreeMonitors;
+
+    *(void **)(&x11Context.pXRRGetScreenResources) = dlsym(x11Context.pRandLibraryHandle, "XRRGetScreenResources");
+    checkFunctionPtrReturn(x11Context.pXRRGetScreenResources);
+
+    *(void **)(&x11Context.pXRRSetCrtcConfig) = dlsym(x11Context.pRandLibraryHandle, "XRRSetCrtcConfig");
+    checkFunctionPtrReturn(x11Context.pXRRSetCrtcConfig);
+
     *(void **)(&x11Context.pXRRFreeScreenResources) = dlsym(x11Context.pRandLibraryHandle, "XRRFreeScreenResources");
-    checkFunctionPtr(x11Context.pXRRFreeMonitors);
+    checkFunctionPtrReturn(x11Context.pXRRFreeScreenResources);
 
     *(void **)(&x11Context.pXRRFreeModeInfo) = dlsym(x11Context.pRandLibraryHandle, "XRRFreeModeInfo");
-    checkFunctionPtr(x11Context.pXRRFreeModeInfo);
+    checkFunctionPtrReturn(x11Context.pXRRFreeModeInfo);
 
     *(void **)(&x11Context.pXRRFreeOutputInfo) = dlsym(x11Context.pRandLibraryHandle, "XRRFreeOutputInfo");
-    checkFunctionPtr(x11Context.pXRRFreeOutputInfo);
+    checkFunctionPtrReturn(x11Context.pXRRFreeOutputInfo);
 
     *(void **)(&x11Context.pXRRSetScreenSize) = dlsym(x11Context.pRandLibraryHandle, "XRRSetScreenSize");
-    checkFunctionPtr(x11Context.pXRRSetScreenSize);
+    checkFunctionPtrReturn(x11Context.pXRRSetScreenSize);
 
     *(void **)(&x11Context.pXRRUpdateConfiguration) = dlsym(x11Context.pRandLibraryHandle, "XRRUpdateConfiguration");
-    checkFunctionPtr(x11Context.pXRRUpdateConfiguration);
+    checkFunctionPtrReturn(x11Context.pXRRUpdateConfiguration);
 
     *(void **)(&x11Context.pXRRAllocModeInfo) = dlsym(x11Context.pRandLibraryHandle, "XRRAllocModeInfo");
-    checkFunctionPtr(x11Context.pXRRAllocModeInfo);
+    checkFunctionPtrReturn(x11Context.pXRRAllocModeInfo);
 
     *(void **)(&x11Context.pXRRCreateMode) = dlsym(x11Context.pRandLibraryHandle, "XRRCreateMode");
-    checkFunctionPtr(x11Context.pXRRCreateMode);
+    checkFunctionPtrReturn(x11Context.pXRRCreateMode);
 
     *(void **)(&x11Context.pXRRGetOutputInfo) = dlsym(x11Context.pRandLibraryHandle, "XRRGetOutputInfo");
-    checkFunctionPtr(x11Context.pXRRGetOutputInfo);
+    checkFunctionPtrReturn(x11Context.pXRRGetOutputInfo);
 
     *(void **)(&x11Context.pXRRGetCrtcInfo) = dlsym(x11Context.pRandLibraryHandle, "XRRGetCrtcInfo");
-    checkFunctionPtr(x11Context.pXRRGetCrtcInfo);
+    checkFunctionPtrReturn(x11Context.pXRRGetCrtcInfo);
 
     *(void **)(&x11Context.pXRRAddOutputMode) = dlsym(x11Context.pRandLibraryHandle, "XRRAddOutputMode");
-    checkFunctionPtr(x11Context.pXRRAddOutputMode);
+    checkFunctionPtrReturn(x11Context.pXRRAddOutputMode);
 
     return VINF_SUCCESS;
 }
@@ -802,6 +900,9 @@ static void x11Connect()
     x11Context.pXRRGetCrtcInfo = NULL;
     x11Context.pXRRAddOutputMode = NULL;
     x11Context.fWmwareCtrlExtention = false;
+    x11Context.fMonitorInfoAvailable = false;
+    x11Context.hRandRMajor = 0;
+    x11Context.hRandRMinor = 0;
 
     int dummy;
     if (x11Context.pDisplay != NULL)
@@ -847,6 +948,13 @@ static void x11Connect()
 #endif
         if (!fSuccess)
         {
+            XCloseDisplay(x11Context.pDisplay);
+            x11Context.pDisplay = NULL;
+            return;
+        }
+        if (x11Context.hRandRMajor < 1 || x11Context.hRandRMinor <= 3)
+        {
+            VBClLogFatalError("Resizing service requires libXrandr Version >= 1.4. Detected version is %d.%d\n", x11Context.hRandRMajor, x11Context.hRandRMinor);
             XCloseDisplay(x11Context.pDisplay);
             x11Context.pDisplay = NULL;
             return;
@@ -923,6 +1031,7 @@ static bool disableCRTC(RRCrtc crtcID)
         ret = x11Context.pXRRSetCrtcConfig(x11Context.pDisplay, x11Context.pScreenResources, crtcID,
                                            CurrentTime, 0, 0, None, RR_Rotate_0, NULL, 0);
 #endif
+    /** @todo  In case of unsuccesful crtc config set  we have to revert frame buffer size and crtc sizes. */
     if (ret == Success)
         return true;
     else
@@ -997,7 +1106,7 @@ static bool resizeFrameBuffer(struct RANDROUTPUT *paOutputs)
         x11Context.pXRRSelectInput(x11Context.pDisplay, x11Context.rootWindow, 0);
 #endif
     XRRScreenSize newSize = currentSize();
-    /** @todo  In case of unsuccesful frame buffer resize we have to revert frame buffer size and crtc sizes. */
+
     if (!event || newSize.width != (int)iXRes || newSize.height != (int)iYRes)
     {
         VBClLogError("Resizing frame buffer to %d %d has failed\n", iXRes, iYRes);
@@ -1233,17 +1342,24 @@ static const char *getPidFilePath()
 static int run(struct VBCLSERVICE **ppInterface, bool fDaemonised)
 {
     RT_NOREF(ppInterface, fDaemonised);
-    int rc;
-    uint32_t events;
+
+    /* In 32-bit guests GAs build on our release machines causes an xserver hang.
+     * So for 32-bit GAs we use our DRM client. */
+#if ARCH_BITS == 32
+    startDRMClient();
+    return VERR_NOT_AVAILABLE;
+#endif
+
+    if (!init())
+        return VERR_NOT_AVAILABLE;
+
     /* Do not acknowledge the first event we query for to pick up old events,
      * e.g. from before a guest reboot. */
     bool fAck = false;
     bool fFirstRun = true;
-    if (!init())
-        return VERR_NOT_AVAILABLE;
     static struct VMMDevDisplayDef aMonitors[VMW_MAX_HEADS];
 
-    rc = VbglR3CtlFilterMask(VMMDEV_EVENT_DISPLAY_CHANGE_REQUEST, 0);
+    int rc = VbglR3CtlFilterMask(VMMDEV_EVENT_DISPLAY_CHANGE_REQUEST, 0);
     if (RT_FAILURE(rc))
         VBClLogFatalError("Failed to request display change events, rc=%Rrc\n", rc);
     rc = VbglR3AcquireGuestCaps(VMMDEV_GUEST_SUPPORTS_GRAPHICS, 0, false);
@@ -1298,6 +1414,13 @@ static int run(struct VBCLSERVICE **ppInterface, bool fDaemonised)
                 if (aOutputs[j].fEnabled)
                     iRunningX += aOutputs[j].width;
             }
+            /* In 32-bit guests GAs build on our release machines causes an xserver lock during vmware_ctrl extention
+               if we do the call withing XGrab. We make the call the said extension only once (to connect the outputs)
+               rather than at each resize iteration. */
+#if ARCH_BITS == 32
+            if (fFirstRun)
+                callVMWCTRL(aOutputs);
+#endif
             setXrandrTopology(aOutputs);
             /* Wait for some seconds and set toplogy again after the boot. In some desktop environments (cinnamon) where
                DE get into our resizing our first resize is reverted by the DE. Sleeping for some secs. helps. Setting
@@ -1309,6 +1432,7 @@ static int run(struct VBCLSERVICE **ppInterface, bool fDaemonised)
                 fFirstRun = false;
             }
         }
+        uint32_t events;
         do
         {
             rc = VbglR3WaitEvent(VMMDEV_EVENT_DISPLAY_CHANGE_REQUEST, RT_INDEFINITE_WAIT, &events);

@@ -2203,6 +2203,12 @@ void UICommon::setWMClass(QWidget *pWidget, const QString &strNameString, const 
     XSetClassHint(QX11Info::display(), pWidget->window()->winId(), &windowClass);
 }
 
+/* static */
+void UICommon::setXwaylandMayGrabKeyboardFlag(QWidget *pWidget)
+{
+    XXSendClientMessage(QX11Info::display(), pWidget->window()->winId(),
+                        "_XWAYLAND_MAY_GRAB_KEYBOARD", 1);
+}
 #endif /* VBOX_WS_X11 */
 
 /* static */
@@ -3087,18 +3093,19 @@ void UICommon::prepareStorageMenu(QMenu &menu,
             continue;
         /* Make sure recent-medium usage is unique: */
         bool fIsRecentMediumUsed = false;
-        foreach (const CMediumAttachment &otherAttachment, comAttachments)
-        {
-            if (otherAttachment != comCurrentAttachment)
+        if (enmMediumType != UIMediumDeviceType_DVD)
+            foreach (const CMediumAttachment &otherAttachment, comAttachments)
             {
-                const CMedium &comOtherMedium = otherAttachment.GetMedium();
-                if (!comOtherMedium.isNull() && comOtherMedium.GetLocation() == strRecentMediumLocation)
+                if (otherAttachment != comCurrentAttachment)
                 {
-                    fIsRecentMediumUsed = true;
-                    break;
+                    const CMedium &comOtherMedium = otherAttachment.GetMedium();
+                    if (!comOtherMedium.isNull() && comOtherMedium.GetLocation() == strRecentMediumLocation)
+                    {
+                        fIsRecentMediumUsed = true;
+                        break;
+                    }
                 }
             }
-        }
         /* If recent-medium usage is unique: */
         if (!fIsRecentMediumUsed)
         {
@@ -4028,9 +4035,11 @@ void UICommon::prepare()
 {
     /* Make sure QApplication cleanup us on exit: */
     connect(qApp, &QGuiApplication::aboutToQuit, this, &UICommon::cleanup);
+#ifndef VBOX_GUI_WITH_CUSTOMIZATIONS1
     /* Make sure we handle host OS session shutdown as well: */
     connect(qApp, &QGuiApplication::commitDataRequest,
             this, &UICommon::sltHandleCommitDataRequest);
+#endif /* VBOX_GUI_WITH_CUSTOMIZATIONS1 */
 
 #ifdef VBOX_WS_MAC
     /* Determine OS release early: */
@@ -4405,6 +4414,28 @@ void UICommon::prepare()
                 return msgCenter().cannotFindMachineByName(m_comVBox, vmNameOrUuid);
         }
         m_strManagedVMId = machine.GetId();
+
+        if (m_fSeparateProcess)
+        {
+            /* Create a log file for VirtualBoxVM process. */
+            QString str = machine.GetLogFolder();
+            com::Utf8Str logDir(str.toUtf8().constData());
+
+            /* make sure the Logs folder exists */
+            if (!RTDirExists(logDir.c_str()))
+                RTDirCreateFullPath(logDir.c_str(), 0700);
+
+            com::Utf8Str logFile = com::Utf8StrFmt("%s%cVBoxUI.log",
+                                                   logDir.c_str(), RTPATH_DELIMITER);
+
+            com::VBoxLogRelCreate("GUI (separate)", logFile.c_str(),
+                                  RTLOGFLAGS_PREFIX_TIME_PROG | RTLOGFLAGS_RESTRICT_GROUPS,
+                                  "all all.restrict -default.restrict",
+                                  "VBOX_RELEASE_LOG", RTLOGDEST_FILE,
+                                  32768 /* cMaxEntriesPerGroup */,
+                                  0 /* cHistory */, 0 /* uHistoryFileTime */,
+                                  0 /* uHistoryFileSize */, NULL);
+        }
     }
 
     /* For Selector UI: */
@@ -4597,6 +4628,7 @@ void UICommon::cleanup()
     m_fValid = false;
 }
 
+#ifndef VBOX_GUI_WITH_CUSTOMIZATIONS1
 void UICommon::sltHandleCommitDataRequest(QSessionManager &manager)
 {
     LogRel(("GUI: UICommon::sltHandleCommitDataRequest: Emergency shutdown initiated\n"));
@@ -4616,6 +4648,7 @@ void UICommon::sltHandleCommitDataRequest(QSessionManager &manager)
     ShutdownBlockReasonCreateAPI((HWND)windowManager().mainWindowShown()->winId(), L"Shutdown in progress...");
 #endif
 }
+#endif /* VBOX_GUI_WITH_CUSTOMIZATIONS1 */
 
 void UICommon::sltHandleVBoxSVCAvailabilityChange(bool fAvailable)
 {

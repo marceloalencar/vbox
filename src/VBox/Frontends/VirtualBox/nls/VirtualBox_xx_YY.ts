@@ -2724,11 +2724,6 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Cloud Network</source>
-        <comment>NetworkAttachmentType</comment>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>PCnet-PCI II (Am79C970A)</source>
         <comment>NetworkAdapterType</comment>
         <translation type="unfinished"></translation>
@@ -3064,22 +3059,22 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>IDE Primary Master</source>
+        <source>IDE Primary Device 0</source>
         <comment>StorageSlot</comment>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>IDE Primary Slave</source>
+        <source>IDE Primary Device 1</source>
         <comment>StorageSlot</comment>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>IDE Secondary Master</source>
+        <source>IDE Secondary Device 0</source>
         <comment>StorageSlot</comment>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>IDE Secondary Slave</source>
+        <source>IDE Secondary Device 1</source>
         <comment>StorageSlot</comment>
         <translation type="unfinished"></translation>
     </message>
@@ -3775,6 +3770,11 @@
     </message>
     <message>
         <source>Start instance ...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Cloud Network [EXPERIMENTAL]</source>
+        <comment>NetworkAttachmentType</comment>
         <translation type="unfinished"></translation>
     </message>
 </context>

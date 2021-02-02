@@ -660,6 +660,62 @@ typedef FNRTHTTPHEADERCALLBACK *PFNRTHTTPHEADERCALLBACK;
 RTR3DECL(int) RTHttpSetHeaderCallback(RTHTTP hHttp, PFNRTHTTPHEADERCALLBACK pfnCallback, void *pvUser);
 
 
+/**
+ * Supported proxy types.
+ */
+typedef enum RTHTTPPROXYTYPE
+{
+    RTHTTPPROXYTYPE_INVALID = 0,
+    RTHTTPPROXYTYPE_NOPROXY,
+    RTHTTPPROXYTYPE_HTTP,
+    RTHTTPPROXYTYPE_HTTPS,
+    RTHTTPPROXYTYPE_SOCKS4,
+    RTHTTPPROXYTYPE_SOCKS5,
+    RTHTTPPROXYTYPE_UNKNOWN,
+    RTHTTPPROXYTYPE_END,
+    RTHTTPPROXYTYPE_32BIT_HACK = 0x7fffffff
+} RTHTTPPROXYTYPE;
+
+/**
+ * Proxy information returned by RTHttpQueryProxyInfoForUrl.
+ */
+typedef struct RTHTTPPROXYINFO
+{
+    /** Proxy host name. */
+    char               *pszProxyHost;
+    /** Proxy port number (UINT32_MAX if not specified). */
+    uint32_t            uProxyPort;
+    /** The proxy type (RTHTTPPROXYTYPE_HTTP, RTHTTPPROXYTYPE_SOCKS5, ++). */
+    RTHTTPPROXYTYPE     enmProxyType;
+    /** Proxy username. */
+    char               *pszProxyUsername;
+    /** Proxy password. */
+    char               *pszProxyPassword;
+} RTHTTPPROXYINFO;
+/** A pointer to proxy information structure. */
+typedef RTHTTPPROXYINFO *PRTHTTPPROXYINFO;
+
+/**
+ * Retrieve system proxy information for the specified URL.
+ *
+ * @returns IPRT status code.
+ * @param   hHttp           The HTTP client handle.
+ * @param   pszUrl          The URL that needs to be accessed via proxy.
+ * @param   pProxyInfo      Where to return the proxy information.  This must be
+ *                          freed up by calling RTHttpFreeProxyInfo() when done.
+ */
+RTR3DECL(int) RTHttpQueryProxyInfoForUrl(RTHTTP hHttp, const char *pszUrl, PRTHTTPPROXYINFO pProxyInfo);
+
+/**
+ * Counter part to RTHttpQueryProxyInfoForUrl that releases any memory returned
+ * in the proxy info structure.
+ *
+ * @returns IPRT status code.
+ * @param   pProxyInfo      Pointer to proxy info returned by a successful
+ *                          RTHttpQueryProxyInfoForUrl() call.
+ */
+RTR3DECL(int) RTHttpFreeProxyInfo(PRTHTTPPROXYINFO pProxyInfo);
+
 /** @name thin wrappers for setting one or a few related curl options
  * @remarks Temporary. Will not be included in the 6.0 release!
  * @{ */

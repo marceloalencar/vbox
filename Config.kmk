@@ -747,10 +747,6 @@ if1of ($(KBUILD_TARGET), darwin freebsd linux solaris win)
 endif
 # Enable ballooning
 VBOX_WITH_MEMBALLOON = 1
-# Enable crOpenGL service
-if1of ($(KBUILD_TARGET), darwin freebsd linux solaris win)
- VBOX_WITH_CROGL = 1
-endif
 # Enable cURL (required for the network part of the GUI)
 VBOX_WITH_LIBCURL = 1
 # Enable Host=>Guest Drag'n'Drop
@@ -806,7 +802,7 @@ endif
 # Use new VBoxNetDhcpd instead of old VBoxNetDHCP
 VBOX_WITH_DHCPD = 1
 # Experimental suport for cloud network integration
-#VBOX_WITH_CLOUD_NET = 1
+VBOX_WITH_CLOUD_NET = 1
 ## @}
 
 
@@ -1115,7 +1111,6 @@ endif
 
 ifeq ($(KBUILD_TARGET),solaris)
  VBOX_WITH_SECURELABEL=
- VBOX_WITH_OGL=
 endif
 
 ifeq ($(KBUILD_TARGET),win)
@@ -1125,7 +1120,6 @@ endif
 
 ifn1of ($(KBUILD_TARGET_ARCH), x86 amd64)
  VBOX_WITH_ADDITION_DRIVERS=
- VBOX_WITH_CROGL=
  VBOX_WITH_DEBUGGER=
  VBOX_WITH_DOCS=
  VBOX_WITH_EHCI=
@@ -1263,9 +1257,6 @@ ifdef VBOX_OSE
   VBOX_WITH_RECORDING=
   VBOX_WITH_AUDIO_RECORDING=
  endif
- # Disable building and packing vboximg-mount.
- VBOX_WITH_VBOXIMGMOUNT=
- VBOX_WITH_FUSE_PACKING=
  # branding
  VBOX_BRAND_LICENSE_HTML             := $(PATH_ROOT)/doc/License-gpl-2.0.html
  VBOX_BRAND_LICENSE_RTF              := $(PATH_ROOT)/doc/License-gpl-2.0.rtf
@@ -1362,7 +1353,6 @@ endif
 ifdef VBOX_HEADLESS
  VBOX_WITH_QTGUI=
  VBOX_WITH_VBOXSDL=
- VBOX_WITH_OGL=
  VBOX_WITH_KCHMVIEWER=
  VBOX_WITH_VRDP_RDESKTOP=
 endif
@@ -1435,7 +1425,7 @@ VBOX_JAVA_PACKAGE           = org.virtualbox$(VBOX_API_SUFFIX)
 # Derived / helper config indicators.  Not configurable.
 #
 
-# Use the OpenGL module in qt when the video hardware acceleartion feature
+# Use the OpenGL module in qt when the video hardware acceleration feature
 # is enabled.
 if defined(VBOX_WITH_VIDEOHWACCEL) && defined(VBOX_WITH_QTGUI)
  VBOX_GUI_USE_QGL = 1
@@ -2052,11 +2042,7 @@ endif
 
 
 # Intel ASL compiler for ACPI
-if "$(KBUILD_HOST)" == "darwin" && "$(KBUILD_HOST_VERSION_MAJOR)" >= 19  # Temp hack! Catalina needs 64-bit binary
-VBOX_IASLCMD   ?= /opt/local/bin/iasl$(HOSTSUFF_EXE)
-else
 VBOX_IASLCMD   ?= $(firstword $(wildcard $(KBUILD_DEVTOOLS_HST)/bin/iasl$(HOSTSUFF_EXE)) iasl$(HOSTSUFF_EXE))
-endif
 
 # libxslt XSLT processor. (see PATH_TOOL_YASM for explanation why it's temporarily located in bin.)
 ifeq ($(VBOX_XSLTPROC),)
@@ -2555,46 +2541,6 @@ VBOX_GRAPHICS_INCS = $(PATH_ROOT)/include/VBox/Graphics
 VBOX_JPEG_INCS     = $(PATH_ROOT)/src/libs/jpeg-9b
 
 
-#
-# crOpenGL related paths and variables.
-#
-ifdef VBOX_WITH_CROGL
- ifdef VBOX_WITH_WDDM
-  VBOX_WITH_CRHGSMI = 1
- endif
-
- VBOX_PATH_CROGL_GLAPI       = $(PATH_ROOT)/src/VBox/GuestHost/OpenGL/glapi_parser
- VBOX_PATH_CROGL_GENFILES    = $(PATH_OBJ)/VBoxOGLgen
- VBOX_PATH_CROGL_INCLUDE     = $(PATH_ROOT)/src/VBox/GuestHost/OpenGL/include
- VBOX_CROGL_API_FILES        = $(VBOX_PATH_CROGL_GLAPI)/apiutil.py $(VBOX_PATH_CROGL_GLAPI)/APIspec.txt
- VBOX_CROGL_PYTHON_ENV       = $(REDIRECT) $(if $1,-E 'PYTHONPATH=$1',) $(if $2,-o '$2',) -0 '$(if $3,$3,/dev/null)' --
-
- if1of ($(KBUILD_HOST), os2 win)
-  VBOX_PATH_CROGL_PYTHON_INCLUDE = $(VBOX_PATH_CROGL_GLAPI);$(PATH_ROOT)/src/VBox/GuestHost/OpenGL/packer;$(PATH_ROOT)/src/VBox/HostServices/SharedOpenGL/crserverlib
- else
-  VBOX_PATH_CROGL_PYTHON_INCLUDE = $(VBOX_PATH_CROGL_GLAPI):$(PATH_ROOT)/src/VBox/GuestHost/OpenGL/packer:$(PATH_ROOT)/src/VBox/HostServices/SharedOpenGL/crserverlib
- endif
-
- ifneq ($(KBUILD_TARGET),win)
-  VBOX_LIB_OGL        = $(VBOX_PATH_ADDITIONS)/VBoxOGL$(VBOX_SUFF_DLL)
- endif
-
- if1of ($(KBUILD_TARGET), freebsd linux solaris)
-  ifndef VBOX_USE_SYSTEM_GL_HEADERS
-   VBOX_GL_INCS = \
-        $(VBOX_PATH_X11_ROOT)/glproto-1.4.10 \
-        $(VBOX_PATH_X11_ROOT)/mesa-7.2
-  endif
- endif
-
- VBOX_DARWIN_OPENGL_INST     = obj/VBoxOGL/GL/
- VBOX_DARWIN_OPENGL_HEADERS  = gl.h glu.h
- SDK_DARWIN-OPENGL           = Workaround SDK for the darwin OpenGL include directorly layout layout.
- SDK_DARWIN-OPENGL_INCS      = $(PATH_OUT)/obj/VBoxOGL
- SDK_DARWIN-OPENGL_ORDERDEPS = $(addprefix $(PATH_OUT)/obj/VBoxOGL/GL/,$(VBOX_DARWIN_OPENGL_HEADERS))
- ## @todo kBuild: Using INTERMEDIATES doesn't work!
-endif
-
 # The icons to use.
 ifdef VBOX_OSE
  VBOX_WINDOWS_ICON_FILE           ?= $(PATH_ROOT)/src/VBox/Artwork/win/OSE/VirtualBox_win.ico
@@ -2854,6 +2800,8 @@ endif
 	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_Wno-stringop-overflow          ?= $(call VBOX_GCC_CHECK_CXX,-Wno-stringop-overflow,)'
 	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_Wno-stringop-truncation        ?= $(call VBOX_GCC_CHECK_CXX,-Wno-stringop-truncation,)'
 	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_Wno-cast-function-type         ?= $(call VBOX_GCC_CHECK_CC,-Wno-cast-function-type,)'
+	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_Wno-deprecated-declarations    ?= $(call VBOX_GCC_CHECK_CC,-Wno-deprecated-declarations,)'
+	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_Wno-implicit-fallthrough       ?= $(call VBOX_GCC_CHECK_CC,-Wno-implicit-fallthrough,)'
 	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_fno-stack-protector   ?= $(call VBOX_GCC_CHECK_CC,-fno-stack-protector,)'
 	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_fno-dwarf2-cfi-asm    ?= $(call VBOX_GCC_CHECK_CC,-fno-dwarf2-cfi-asm,)'
 	$(QUIET)$(APPEND) '$@' 'VBOX_GCC_m64                   ?= $(call VBOX_GCC_CHECK_CC,-m64,)'
@@ -3433,6 +3381,8 @@ ifdef VBOX_SIGNING_MODE
   $(error VBOX_SIGNING_MODE must be either 'test' or 'release'. The value '$(VBOX_SIGNING_MODE)' is not recognized.)
  endif
  VBOX_RETRY    ?= $(ASH) $(KBUILD_DEVTOOLS)/bin/retry.sh
+ # temporary solution for a $(dir ...) equivalent which assumes that it gets a single path, possibly with spaces.
+ VBOX_DIRX = $(subst ?,$(SP),$(dir $(subst $(SP),?,$1)))
  # Corp code signing client.
  VBOX_CCS_CLIENT_JAR := $(firstword $(rsort \
  	$(wildcard $(KBUILD_DEVTOOLS)/common/ccs/v*/Client.jar)) \
@@ -3449,7 +3399,7 @@ ifdef VBOX_SIGNING_MODE
  VBOX_CCS_SIGN_CMD    = $(VBOX_RETRY) $(VBOX_JAVA) -jar "$(VBOX_CCS_CLIENT_JAR)" \
  	sign -user "$(VBOX_CCS_USER)" -global_uid "$(VBOX_CCS_GLOBAL_UID)" \
 		-job_timeout 90 -server_timeout 75 -server "$(VBOX_CCS_SERVER)" \
- 		-sign_method "$1" -file_to_sign "$2" -signed_location "$(if $3,$3,$(dir $2))" $4
+ 		-sign_method "$1" -file_to_sign "$2" -signed_location "$(if $3,$3,$(call VBOX_DIRX,$2))" $4
 
  ifeq ($(KBUILD_HOST),win)
   #
@@ -3489,7 +3439,8 @@ ifdef VBOX_SIGNING_MODE
    VBOX_CERTIFICATE_FINGERPRINT ?= 6f 47 42 06 bc bb 39 1b b8 2b a9 e5 dc 03 02 de f3 7a eb be
    #VBOX_CROSS_CERTIFICATE_FILE ?= $(VBOX_PATH_SELFSIGN)/VeriSign Class 3 Public Primary Certification Authority - G5.cer
    VBOX_CROSS_CERTIFICATE_FILE ?= $(VBOX_PATH_SELFSIGN)/DigiCert Assured ID Root CA.crt
-   VBOX_TSA_URL ?= http://timestamp.verisign.com/scripts/timstamp.dll
+   #VBOX_TSA_URL ?= http://timestamp.verisign.com/scripts/timstamp.dll - Appears to be broken between 2020-12-25 and 2020-12-30 (bugref:9849).
+   VBOX_TSA_URL ?= http://timestamp.digicert.com
   endif
   if !defined(VBOX_CROSS_CERTIFICATE_FILE_ARGS) && defined(VBOX_CROSS_CERTIFICATE_FILE)
    VBOX_CROSS_CERTIFICATE_FILE_ARGS = /ac "$(VBOX_CROSS_CERTIFICATE_FILE)"
@@ -3541,10 +3492,10 @@ ifdef VBOX_SIGNING_MODE
   # @param 6  non-zero for alternative command separator.  This is used for generating repacking scripts.
   ifndef VBOX_SIGN_FILE_FN
    if $(intersects win all 1,$(VBOX_WITH_CORP_CODE_SIGNING))
-    VBOX_SIGN_FILE_FN     = $(call VBOX_CCS_SIGN_CMD,driver$(if-expr "$3" == "/ph",_pagehash,),$1,$(dir $1),-digest_algo SHA1) \
+    VBOX_SIGN_FILE_FN     = $(call VBOX_CCS_SIGN_CMD,driver$(if-expr "$3" == "/ph",_pagehash,),$1,,-digest_algo SHA1) \
         $(if-expr "$5" == "",\
          $(if-expr "$6" == "",$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB)),$6) \
-         $(call VBOX_CCS_SIGN_CMD,driver$(if-expr "$3" == "/ph",_pagehash,),$1,$(dir $1),-dual_sign -digest_algo SHA2))
+         $(call VBOX_CCS_SIGN_CMD,driver$(if-expr "$3" == "/ph",_pagehash,),$1,,-dual_sign -digest_algo SHA2))
    else ifdef VBOX_CERTIFICATE_SHA2_SUBJECT_NAME
     VBOX_SIGN_FILE_FN     = $(VBOX_SIGNTOOL) \
     	sign /fd sha1\
@@ -3585,7 +3536,7 @@ ifdef VBOX_SIGNING_MODE
   # @param 2  The directory to put the signed file in. Defaults to $(dir $1).
   ifndef VBOX_SIGN_EV_FILE_FN
    if $(intersects win_ev all 1,$(VBOX_WITH_CORP_CODE_SIGNING))
-    VBOX_SIGN_EV_FILE_FN  = $(call VBOX_CCS_SIGN_CMD,microsoftev,$1,$(if $2,$2,$(dir $1)))
+    VBOX_SIGN_EV_FILE_FN  = $(call VBOX_CCS_SIGN_CMD,microsoftev,$1,$(if $2,$2,))
    else ifdef VBOX_CERTIFICATE_EV_SUBJECT_NAME
     VBOX_SIGN_EV_FILE_FN  = $(VBOX_SIGNTOOL) \
     	sign /as /fd sha256 \
@@ -3627,7 +3578,7 @@ ifdef VBOX_SIGNING_MODE
   	$(if-expr "$5" == "",\
 	$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB))$(RM) -f -- "$1.ccs" \
   	$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB))$(CP) -- "$1" "$1.ccs" \
-  	$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB))$(call VBOX_CCS_SIGN_CMD,driver$(if-expr "$3" == "/ph",_pagehash,),$1.ccs,$(dir $1.ccs),-digest_algo SHA2) \
+  	$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB))$(call VBOX_CCS_SIGN_CMD,driver$(if-expr "$3" == "/ph",_pagehash,),$1.ccs,,-digest_algo SHA2) \
   	$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB))$(VBOX_RTSIGNTOOL) add-nested-$(if-expr "$(suffix $1)" == ".cat",cat,exe)-signature -v "$1" "$1.ccs" \
   	$(if-expr "$4" == "2",$$(NLTAB),$(NLTAB))$(RM) -f -- "$1.ccs" \
   	,)
@@ -3710,7 +3661,7 @@ ifdef VBOX_SIGNING_MODE
  VBOX_CCS_NOTARIZE_CMD = $(VBOX_RETRY) $(VBOX_JAVA) -jar "$(VBOX_CCS_CLIENT_JAR)" \
  	mac_notarize -user "$(VBOX_CCS_USER)" -global_uid "$(VBOX_CCS_GLOBAL_UID)" \
 		-job_timeout 90 -server_timeout 75 -server "$(VBOX_CCS_SERVER)" \
- 		-file_to_notarize "$1" -bundle_id "$2" -download_location "$(if $3,$3,$(dir $1))"
+ 		-file_to_notarize "$1" -bundle_id "$2" -download_location "$(if $3,$3,$(call VBOX_DIRX,$1))"
 
   ## Sign an application bundle, framework or kernel extension.
   # @param 1  The bundle to sign.
@@ -3720,10 +3671,10 @@ ifdef VBOX_SIGNING_MODE
    ## @todo cannot handle $(2), the identifier.
    ## @todo $(3) is hopefully either empty, --deep or --entitlements=...
    VBOX_SIGN_BUNDLE_FN = $(call MSG_TOOL,SIGNTOOL,,$(1),$(2))$(NLTAB) \
-	ditto -c -k --keepParent "$(1)" "$(1).zip"$(NLTAB) \
+	ditto -c -k -V --keepParent "$(1)" "$(1).zip"$(NLTAB) \
 	$(call VBOX_CCS_SIGN_CMD,apple,$(1).zip,,$(subst --entitlements=,-entitlement_file_path ,$(subst --deep,-deep,$(3))) \
 		$(if $(VBOX_WITH_MACOS_HARDENED_RUNTIME),-hardened_runtime))$(NLTAB) \
-	ditto -x -k "$(1).zip" "$(1)/../"$(NLTAB) \
+	ditto -x -k -V "$(1).zip" "$(1)/../"$(NLTAB) \
 	$(RM) -f -- "$(1).zip"
   else
    VBOX_SIGN_BUNDLE_FN = $(call MSG_TOOL,SIGNTOOL,,$(1),$(2))$(NLTAB)$(VBOX_CODESIGN) \
@@ -4165,6 +4116,20 @@ if1of ($(KBUILD_TARGET), os2 win) # Not required on solaris.
  SDK_VBOX_ZLIB_STATIC_LIBS ?= $(PATH_STAGE_LIB)/VBox-zlib-static$(VBOX_SUFF_LIB)
 endif
 
+SDK_VBOX_LZF		= .
+SDK_VBOX_LZF_INCS  ?= $(PATH_ROOT)/src/libs/liblzf-3.4
+SDK_VBOX_LZF_LIBS  ?= $(PATH_STAGE_LIB)/VBox-liblzf$(VBOX_SUFF_LIB)
+
+SDK_VBOX_LZF-x86	= .
+SDK_VBOX_LZF-x86_EXTENDS = VBOX_LZF
+SDK_VBOX_LZF_LIBS-x86 ?= $(PATH_STAGE_LIB)/VBox-liblzf-x86$(VBOX_SUFF_LIB)
+
+SDK_VBOX_LZF_STATIC  = .
+SDK_VBOX_LZF_STATIC_EXTENDS ?= VBOX_LZF
+if1of ($(KBUILD_TARGET), os2 win)
+ SDK_VBOX_LZF_STATIC_LIBS ?= $(PATH_STAGE_LIB)/VBox-liblzf-static$(VBOX_SUFF_LIB)
+endif
+
 SDK_VBOX_OPENSSL      = Only for VBoxRT and/or statically linked programs.
 SDK_VBOX_OPENSSL_VBOX_DEFAULT_INCS := $(PATH_OUT)/obj/crypto-1.1.1-headers/include
 SDK_VBOX_OPENSSL_INCS ?= $(SDK_VBOX_OPENSSL_VBOX_DEFAULT_INCS)
@@ -4507,15 +4472,20 @@ endif # pe
 
 ifeq ($(VBOX_LDR_FMT),elf)
 TEMPLATE_VBoxR0_TOOL                = $(VBOX_GCC_TOOL)
-TEMPLATE_VBoxR0_CFLAGS              = -fno-pie -nostdinc -g $(VBOX_GCC_pipe) $(VBOX_GCC_WERR) $(VBOX_GCC_PEDANTIC_C)   $(VBOX_GCC_Wno-variadic-macros) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-exceptions $(VBOX_GCC_fno-stack-protector) -fno-common $(VBOX_GCC_fvisibility-hidden) -std=gnu99 $(VBOX_GCC_IPRT_FMT_CHECK)
-TEMPLATE_VBoxR0_CXXFLAGS            = -fno-pie -nostdinc -g $(VBOX_GCC_pipe) $(VBOX_GCC_WERR) $(VBOX_GCC_PEDANTIC_CXX) $(VBOX_GCC_Wno-variadic-macros) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-exceptions $(VBOX_GCC_fno-stack-protector) -fno-common $(VBOX_GCC_fvisibility-inlines-hidden) $(VBOX_GCC_fvisibility-hidden) -fno-rtti $(VBOX_GCC_IPRT_FMT_CHECK)
-TEMPLATE_VBoxR0_CFLAGS.amd64        = -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fasynchronous-unwind-tables -ffreestanding
-TEMPLATE_VBoxR0_CXXFLAGS.amd64      = -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fasynchronous-unwind-tables
+TEMPLATE_VBoxR0_CFLAGS              = -fno-pie -nostdinc -g $(VBOX_GCC_pipe) $(VBOX_GCC_WERR) $(VBOX_GCC_PEDANTIC_C) \
+	$(VBOX_GCC_Wno-variadic-macros) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-exceptions \
+	$(VBOX_GCC_fno-stack-protector) -fno-common $(VBOX_GCC_fvisibility-hidden) -std=gnu99 $(VBOX_GCC_IPRT_FMT_CHECK)
+TEMPLATE_VBoxR0_CXXFLAGS            = -fno-pie -nostdinc -g $(VBOX_GCC_pipe) $(VBOX_GCC_WERR) $(VBOX_GCC_PEDANTIC_CXX) \
+	$(VBOX_GCC_Wno-variadic-macros) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-exceptions \
+	$(VBOX_GCC_fno-stack-protector) -fno-common $(VBOX_GCC_fvisibility-inlines-hidden) $(VBOX_GCC_fvisibility-hidden) \
+	-fno-rtti $(VBOX_GCC_IPRT_FMT_CHECK)
+TEMPLATE_VBoxR0_CFLAGS.amd64        = -m64 -mno-red-zone -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fasynchronous-unwind-tables -ffreestanding
+TEMPLATE_VBoxR0_CXXFLAGS.amd64      = -m64 -mno-red-zone -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fasynchronous-unwind-tables
 TEMPLATE_VBoxR0_CXXFLAGS.freebsd    = -ffreestanding
  if $(VBOX_GCC_VERSION_CC) < 30400
   TEMPLATE_VBoxR0_DEFS             += RT_WITHOUT_PRAGMA_ONCE
  endif
-ifeq ($(KBUILD_TARGET),solaris)
+ ifeq ($(KBUILD_TARGET),solaris)
  TEMPLATE_VBoxR0_LDFLAGS            = -r
  TEMPLATE_VBoxR0_LDFLAGS.solaris    = -u _init -u _info
  TEMPLATE_VBoxR0_LIBS.solaris       = \
@@ -4526,19 +4496,32 @@ ifeq ($(KBUILD_TARGET),solaris)
  endif
  # Solaris driver signing.
  TEMPLATE_VBoxR0_POST_CMDS          = $(VBOX_SIGN_DRIVER_CMDS)
-else
+ else
  TEMPLATE_VBoxR0_LDFLAGS            = -nostdlib -Bsymbolic -g
  ## @todo WTF doesn't the globals work? Debug info is supposed to be split everywhere. GRR
  TEMPLATE_VBoxR0_LD_DEBUG           = split
-endif
-ifn1of ($(KBUILD_TARGET),solaris freebsd)
+ endif
+ if1of ($(KBUILD_TARGET), linux)
+VBOX_WITH_VBOXR0_AS_DLL = 1
+TEMPLATE_VBoxR0_DLLSUFF             = .r0
+TEMPLATE_VBoxR0_CFLAGS             += -fPIC
+TEMPLATE_VBoxR0_CXXFLAGS           += -fPIC
+TEMPLATE_VBoxR0_LDFLAGS            +=
+TEMPLATE_VBoxR0_DTRACE_HDR_FLAGS   += --pic
+TEMPLATE_VBoxR0_DTRACE_OBJ_FLAGS   += --pic
+ else
+TEMPLATE_VBoxR0_CFLAGS.amd64       += -mcmodel=kernel
+TEMPLATE_VBoxR0_CXXFLAGS.amd64     += -mcmodel=kernel
+ endif
+ ifn1of ($(KBUILD_TARGET),solaris freebsd)
  TEMPLATE_VBoxR0_LIBS               = \
 	$(VBOX_GCC_LIBGCC) # intrinsics
-endif
-if1of ($(KBUILD_TARGET),linux)
- TEMPLATE_VBoxR0_POST_CMDS          =  $(if $(eq $(tool_do),LINK_SYSMOD),if readelf -S $(out)|grep -q "[cd]tors"; then echo "Found ctors/dtors in $(out)!"; exit 1; fi)
-endif
-endif
+ endif
+ if1of ($(KBUILD_TARGET),linux)
+ TEMPLATE_VBoxR0_POST_CMDS         += $(NLTAB)\
+ 	$(if $(eq $(tool_do),LINK_SYSMOD),if readelf -S $(out)|grep -q "[cd]tors"; then echo "Found ctors/dtors in $(out)!"; exit 1; fi)
+ endif
+endif # elf
 
 ifeq ($(VBOX_LDR_FMT),macho)
 TEMPLATE_VBoxR0_TOOL                = $(VBOX_GCC_TOOL)
@@ -5471,11 +5454,11 @@ ifndef SDK_VBOX_LIBXML2_LIBS
 endif
 if1of ($(KBUILD_TARGET),os2 win)
  TEMPLATE_VBoxR3Static_LIBS        += \
- 	$(PATH_STAGE_LIB)/VBox-liblzf-static$(VBOX_SUFF_LIB) \
- 	$(PATH_STAGE_LIB)/VBox-zlib-static$(VBOX_SUFF_LIB)
+ 	$(SDK_VBOX_LZF_STATIC_LIBS) \
+ 	$(SDK_VBOX_ZLIB_STATIC_LIBS)
 else
  TEMPLATE_VBoxR3Static_LIBS        += \
- 	$(PATH_STAGE_LIB)/VBox-liblzf$(VBOX_SUFF_LIB) \
+ 	$(SDK_VBOX_LZF_LIBS) \
  	$(SDK_VBOX_ZLIB_LIBS)
  if1of ($(KBUILD_TARGET),darwin freebsd)
   TEMPLATE_VBoxR3Static_LIBS       += iconv
@@ -6685,6 +6668,9 @@ ifdef VBOX_WITH_QTGUI
   ifdef VBOX_WITH_NO_GCC_WARNING_POLICY
    TEMPLATE_VBOXQTGUIEXE_CXXFLAGS += $(VBOX_GCC_WERR)
   endif
+  ifn1of ($(USERNAME),dsen serkan) # Bunch of stuff deprecated after 5.6.*. These guys knows how to deal with it. :)
+   TEMPLATE_VBOXQTGUIEXE_CXXFLAGS += $(VBOX_GCC_Wno-deprecated-declarations)
+  endif
   TEMPLATE_VBOXQTGUIEXE_CXXFLAGS.x86 = -m32
   TEMPLATE_VBOXQTGUIEXE_CXXFLAGS.amd64 = -m64
   TEMPLATE_VBOXQTGUIEXE_CXXFLAGS.linux = -pthread
@@ -7448,117 +7434,6 @@ ifeq ($(KBUILD_TARGET),haiku)
  TEMPLATE_VBOXGUESTR0LIB_LDFLAGS = -r -dy
 endif
 
-#
-# Template for building OpenGL host dlls.
-#
-TEMPLATE_VBOXCROGLR3HOSTDLL                  = VBox OpenGL Host DLLs
-TEMPLATE_VBOXCROGLR3HOSTDLL_EXTENDS         := $(if-expr "$(KBUILD_TARGET)" == "win",VBOXR3,VBOXR3NP)
-TEMPLATE_VBOXCROGLR3HOSTDLL_EXTENDS_BY       = prepending
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS             = VBOX_WITH_HGCM UNPACKS
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.win         = _WIN32_WINNT=0x0500 WINDOWS=1
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.linux       = Linux=1 _GNU_SOURCE
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.solaris     = SunOS=1 _GNU_SOURCE #GLEXT_64_TYPES_DEFINED
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.darwin      = DARWIN=1 GL_GLEXT_LEGACY _GNU_SOURCE
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.freebsd     = FreeBSD=1 _GNU_SOURCE
-TEMPLATE_VBOXCROGLR3HOSTDLL_INCS             = $(VBOX_PATH_CROGL_INCLUDE) $(VBOX_PATH_CROGL_GENFILES)
-TEMPLATE_VBOXCROGLR3HOSTDLL_SDKS.darwin      = DARWIN-OPENGL
-TEMPLATE_VBOXCROGLR3HOSTDLL_LDFLAGS.darwin   = -framework AppKit
-TEMPLATE_VBOXCROGLR3HOSTDLL_LDFLAGS.darwin  += \
-	-framework OpenGL \
-	-current_version $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD) \
-	-compatibility_version $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD)
-TEMPLATE_VBOXCROGLR3HOSTDLL_LDFLAGS.linux    = -Wl,--no-as-needed
-TEMPLATE_VBOXCROGLR3HOSTDLL_BLDDIRS          = $(VBOX_PATH_CROGL_GENFILES)/
-ifeq ($(KBUILD_TARGET),darwin)
- TEMPLATE_VBOXCROGLR3HOSTDLL_CFLAGS          = $(TEMPLATE_VBOXR3NP_CFLAGS) -Wno-deprecated-declarations
- TEMPLATE_VBOXCROGLR3HOSTDLL_CXXFLAGS        = $(TEMPLATE_VBOXR3NP_CXXFLAGS) -Wno-deprecated-declarations
- TEMPLATE_VBOXCROGLR3HOSTDLL_OBJCFLAGS       = $(TEMPLATE_VBOXR3NP_OBJCFLAGS) -Wno-deprecated-declarations
-else ifeq ($(KBUILD_TARGET),win)
- #   -wd4055: renderspu.c(1553) : warning C4055: 'type cast' : from data pointer 'const GLvoid *' to function pointer 'PFNVCRSERVER_CLIENT_CALLOUT'
- #   -wd4305: renderspu_wgl.c(1118) : warning C4305: 'type cast' : truncation from 'uint64_t' to 'void *'
- TEMPLATE_VBOXCROGLR3HOSTDLL_CFLAGS          = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3HOSTDLL_EXTENDS)_CFLAGS) \
-  -wd4055 -wd4305
-endif
-
-#
-# Template for building OpenGL host libraries.
-#
-TEMPLATE_VBOXCROGLR3HOSTLIB         = VBox OpenGL Host Libraries
-TEMPLATE_VBOXCROGLR3HOSTLIB_EXTENDS = VBOXCROGLR3HOSTDLL
-TEMPLATE_VBOXCROGLR3HOSTLIB_INST    = $(INST_LIB)
-
-#
-# Template for building OpenGL guest dlls.
-#
-TEMPLATE_VBOXCROGLR3GUESTDLL                  = VBox OpenGL Guest DLLs
-# @todo Temporarily disabled, causes linker errors on Windows because VBoxOGLcrutil and VBoxOGLspupacker both drag in RuntimeGuestR3Shared.lib
-#if "$(KBUILD_TARGET)" == "win" || defined(VBOX_WITH_MASOCHISTIC_WARNINGS) || defined(VBOX_WITH_NO_GCC_WARNING_POLICY) ## @todo use VBoxGuestR3Dll everywhere
-#TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS          = VBoxGuestR3DllMinW2K
-#else
-TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS          = VBOXGUESTR3NPDLL
-#endif
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS             = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_DEFS) VBOX_WITH_HGCM
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.win         = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_DEFS.win) WINDOWS=1
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.linux       = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_DEFS.linux) Linux=1 _GNU_SOURCE
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.solaris     = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_DEFS.solaris) SunOS=1 _GNU_SOURCE #GLEXT_64_TYPES_DEFINED
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.darwin      = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_DEFS.darwin) DARWIN=1 GL_GLEXT_LEGACY _GNU_SOURCE
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.freebsd     = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_DEFS.freebsd) FreeBSD=1 _GNU_SOURCE
-TEMPLATE_VBOXCROGLR3GUESTDLL_INCS             = $(VBOX_PATH_CROGL_INCLUDE) $(VBOX_PATH_CROGL_GENFILES) $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_INCS)
-TEMPLATE_VBOXCROGLR3GUESTDLL_SDKS.darwin      = DARWIN-OPENGL $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_SDKS)
-ifeq ($(KBUILD_TARGET),win)
- #   -wd4255: cr_spu.h(146) : warning C4255: 'wglGetCurrentContextFunc_t' : no function prototype given: converting '()' to '(void)'
- #   -wd4296: udptcpip.c(662) : warning C4296: '>=' : expression is always true
- #   -wd4245: udptcpip.c(174) : warning C4245: '=' : conversion from 'int' to 'CRSocket', signed/unsigned mismatch
- #   -wd4668: tcpip.c(961) : warning C4668: 'CRAPPFAKER_SHOULD_DIE' is not defined as a preprocessor macro, replacing with '0' for '#if/#elif'
- #   -wd4005: v7.1\include\sal_supp.h(57) : warning C4005: '__useHeader' : macro redefinition
- #   -wd4057: state_lists.c(196) : warning C4057: 'function' : 'GLint *' differs in indirection to slightly different base types from 'GLenum *'
- #   -wd4311: wgl.c(183) : warning C4311: 'type cast' : pointer truncation from 'HGLRC' to 'unsigned long' [TODO: fix source code]
- #   -wd4312: wgl.c(218) : warning C4312: 'type cast' : conversion from 'unsigned long' to 'HGLRC' of greater size [TODO: fix source code]
- #   -wd4305: icd_drv.c(325) : warning C4305: 'type cast' : truncation from 'HGLRC' to 'unsigned long'
- #   -wd4306: icd_drv.c(191) : warning C4306: 'type cast' : conversion from 'unsigned long' to 'HGLRC' of greater size
- #   -wd4054: feedbackspu.c(530) : warning C4054: 'type cast' : from function pointer 'SPUGenericFunction' to data pointer 'void *'
- #   -wd4189: load.c(1273) : warning C4189: 'pContextRecord' : local variable is initialized but not referenced
- #   -wd4100: vboxhgcm.c(1365) : warning C4100: 'conn' : unreferenced formal parameter
- TEMPLATE_VBOXCROGLR3GUESTDLL_CFLAGS         = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_CFLAGS) \
- 	-wd4255 -wd4296 -wd4245 -wd4668 -wd4005 -wd4057 -wd4311 -wd4312 -wd4305 -wd4306 -wd4054 -wd4189 -wd4100
-else
- TEMPLATE_VBOXCROGLR3GUESTDLL_CFLAGS          = $(filter-out -pedantic, $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_CFLAGS)) \
- 	$(VBOX_GCC_Wno-overlength-strings) $(VBOX_GCC_Wno-cast-function-type)
- TEMPLATE_VBOXCROGLR3GUESTDLL_CXXFLAGS        = $(filter-out -pedantic, $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_CXXFLAGS))
-endif
-TEMPLATE_VBOXCROGLR3GUESTDLL_LDFLAGS.darwin   = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_LDFLAGS.darwin)\
-	-framework AppKit \
-	-framework OpenGL \
-	-current_version $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD) \
-	-compatibility_version $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD)
-TEMPLATE_VBOXCROGLR3GUESTDLL_BLDDIRS          = $(TEMPLATE_$(TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS)_BLDDIRS) $(VBOX_PATH_CROGL_GENFILES)/
-
-
-#
-# Template for building OpenGL guest libraries.
-#
-TEMPLATE_VBOXCROGLR3GUESTLIB         = VBox OpenGL Guest Libraries
-TEMPLATE_VBOXCROGLR3GUESTLIB_EXTENDS = VBOXCROGLR3GUESTDLL
-TEMPLATE_VBOXCROGLR3GUESTLIB_INST    = $(INST_ADDITIONS_LIB)
-
-
-#
-# Template for building Mesa guest library, Linux-only so far.
-#
-TEMPLATE_VBOXMESAR3GUESTLIB         = VBox Mesa Guest Library
-TEMPLATE_VBOXMESAR3GUESTLIB_EXTENDS = VBOXCROGLR3GUESTDLL
-TEMPLATE_VBOXMESAR3GUESTLIB_INST    = $(INST_ADDITIONS_LIB)
-TEMPLATE_VBOXMESAR3GUESTLIB_DEFS.linux   = Linux=1
-TEMPLATE_VBOXMESAR3GUESTLIB_DEFS.solaris = SunOS=1
-TEMPLATE_VBOXMESAR3GUESTLIB_DEFS.darwin  = DARWIN=1 GL_GLEXT_LEGACY
-ifeq ($(KBUILD_TARGET),linux)
- TEMPLATE_VBOXMESAR3GUESTLIB_ASTOOL              = $(TEMPLATE_VBOXCROGLR3GUESTDLL_TOOL)
- TEMPLATE_VBOXMESAR3GUESTLIB_ASFLAGS             = $(NO_SUCH_VARIABLE)
- TEMPLATE_VBOXMESAR3GUESTLIB_ASFLAGS.x86         = -m32
- TEMPLATE_VBOXMESAR3GUESTLIB_ASFLAGS.amd64       = -m64
- TEMPLATE_VBOXMESAR3GUESTLIB_ASDEFS              = $(NO_SUCH_VARIABLE)
-endif
-
 
 #
 # Guest additions libraries (all static).
@@ -7797,7 +7672,7 @@ endif
 SVN                    ?= svn$(HOSTSUFF_EXE)
 VBOX_SVN_REV_KMK        = $(PATH_OUT)/revision.kmk
 ifndef VBOX_SVN_REV
- VBOX_SVN_REV_CONFIG_FALLBACK := $(patsubst %:,,  $Rev: 137904 $  )
+ VBOX_SVN_REV_CONFIG_FALLBACK := $(patsubst %:,,  $Rev: 142123 $  )
  VBOX_SVN_REV_FALLBACK := $(if-expr $(VBOX_SVN_REV_CONFIG_FALLBACK) > $(VBOX_SVN_REV_VERSION_FALLBACK),$(VBOX_SVN_REV_CONFIG_FALLBACK),$(VBOX_SVN_REV_VERSION_FALLBACK))
  VBOX_SVN_DEP          := $(firstword $(wildcard $(PATH_ROOT)/.svn/wc.db $(abspath $(PATH_ROOT)/../.svn/wc.db) $(abspath $(PATH_ROOT)/../../.svn/wc.db) $(PATH_ROOT)/.svn/entries))
  ifeq ($(which $(SVN)),)
@@ -7810,8 +7685,10 @@ $(VBOX_SVN_REV_KMK).ts +| $(VBOX_SVN_REV_KMK): $(if $(VBOX_SVN_DEP), $(VBOX_SVN_
 	$(QUIET)$(RM) -f $@ $@.tmp
 	$(QUIET)$(MKDIR) -p $(@D)
  ifneq ($(VBOX_SVN_DEP),)
-	$(REDIRECT) -E 'LC_ALL=C' -wo $@.tmp -- $(SVN) info $(PATH_ROOT)
-	$(SED) -e '/^Last Changed Rev/!d'  -e 's/Last Changed Rev\: */export VBOX_SVN_REV=/' --output $@ $@.tmp
+	-$(REDIRECT) -E 'LC_ALL=C' -wo $@.tmp -- $(SVN) info $(PATH_ROOT)
+	# Append fallback. Will be ignored if "svn info" provides meaningful data.
+	$(QUIET)$(APPEND) $@.tmp 'Last Changed Rev: $(VBOX_SVN_REV_FALLBACK)'
+	$(SED) -e '/^Last Changed Rev/!d'  -e 's/Last Changed Rev\: */export VBOX_SVN_REV=/; t a; :a q' --output $@ $@.tmp
 	$(QUIET)$(RM) -f $@.tmp
  else
 	$(QUIET)$(APPEND) $@ 'export VBOX_SVN_REV=$(VBOX_SVN_REV_FALLBACK)'

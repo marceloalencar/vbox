@@ -130,6 +130,8 @@ MAKESELF="makeself"
 MESA="-lGL"
 INCZ=""
 LIBZ="-lz"
+INCLZF="/usr/include/liblzf"
+LIBLZF="-llzf"
 INCVNCSERVER=""
 LIBVNCSERVER="-lvncserver"
 INCDEVMAPPER=""
@@ -332,8 +334,8 @@ test_execute_path()
   local_path="${1}"
   ## Set this to non-empty to make this test non-fatal.
   local_nofail="${2}"
-  echo "executing the binary (LD_LIBRARY_PATH=$1)" >> $LOG
-  LD_LIBRARY_PATH="${local_path}" $ODIR.tmp_out > $ODIR.test_execute.log 2>&1
+  echo "executing the binary (LD_LIBRARY_PATH=$1:$LD_LIBRARY_PATH)" >> $LOG
+  LD_LIBRARY_PATH="${local_path}:$LD_LIBRARY_PATH" $ODIR.tmp_out > $ODIR.test_execute.log 2>&1
   rc=$?
   cat $ODIR.test_execute.log | tee -a $LOG
   if [ $rc -ne 0 ]; then
@@ -933,6 +935,41 @@ EOF
 
 
 #
+# Check for liblzf, needed by VBoxSVC, Runtime, ...
+#
+check_lzf()
+{
+  test_header liblzf
+  cat > $ODIR.tmp_src.cc << EOF
+#include <cstdio>
+#include <lzf.h>
+extern "C" int main(void)
+{
+  printf("found LZF API version %u.%u", LZF_VERSION >> 8, LZF_VERSION & 0xff);
+#if LZF_VERSION >= 0x0105
+  printf(", OK.\n");
+  return 0;
+#else
+  printf(", expected version 1.5 or higher\n");
+  return 1;
+#endif
+}
+EOF
+  [ -n "$INCLZF" ] && I_INCLZF=`prefix_I "$INCLZF"`
+  if test_compile "$LIBLZF $I_INCLZF" liblzf liblzf nofatal; then
+    if test_execute; then
+      echo "if1of (\$(KBUILD_TARGET),darwin freebsd haiku linux)" >> $CNF
+      cnf_append " SDK_VBOX_LZF_LIBS" "`strip_l "$LIBLZF"`"
+      cnf_append " SDK_VBOX_LZF_INCS" "$INCLZF"
+      echo "endif" >> $CNF
+    fi
+  else
+    echo "not found -- builing liblzf from in-tree code."
+  fi
+}
+
+
+#
 # Check for libpng, needed by kchmviewer
 #
 check_png()
@@ -1383,7 +1420,6 @@ check_opengl()
   if [ "$OS" = "darwin" ]; then
     test_header "OpenGL support"
     echo "enabled"
-    cnf_append "VBOX_WITH_CROGL"     "1"
   else
     check_xmu
     check_mesa
@@ -2753,7 +2789,8 @@ fi
 
 # emit disable directives corresponding to any --disable-xxx options.
 if [ $WITH_OPENGL -eq 0 ]; then
-  cnf_append "VBOX_WITH_CROGL" ""
+  cnf_append "VBOX_WITH_VMSVGA3D" ""
+  cnf_append "VBOX_WITH_3D_ACCELERATION" ""
   cnf_append "VBOX_WITH_VIDEOHWACCEL" ""
   cnf_append "VBOX_GUI_USE_QGL" ""
 fi
@@ -2794,6 +2831,7 @@ if [ $ONLY_ADDITIONS -eq 0 ]; then
   [ "$OS" != "darwin"  ] && check_pthread
   check_libxml2
   [ $WITH_LIBIDL -eq 1 ] && check_libidl
+  check_lzf
   check_ssl
   check_curl
   [ $WITH_LIBVPX -eq 1 ] && check_vpx

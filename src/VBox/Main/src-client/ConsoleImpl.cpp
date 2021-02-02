@@ -648,6 +648,15 @@ void Console::uninit()
         return;
     }
 
+#ifdef VBOX_WITH_CLOUD_NET
+    {
+        ComPtr<IVirtualBox> pVirtualBox;
+        HRESULT rc = mMachine->COMGETTER(Parent)(pVirtualBox.asOutParam());
+        AssertComRC(rc);
+        if (SUCCEEDED(rc) && !pVirtualBox.isNull())
+            stopGateways(pVirtualBox, mGateways);
+    }
+#endif /* VBOX_WITH_CLOUD_NET */
     LogFlowThisFunc(("initFailed()=%d\n", autoUninitSpan.initFailed()));
     if (mVmListener)
     {
@@ -9232,7 +9241,7 @@ int Console::i_changeDnDMode(DnDMode_T aDnDMode)
     }
 
     int rc = pVMMDev->hgcmHostCall("VBoxDragAndDropSvc",
-                                   DragAndDropSvc::HOST_DND_SET_MODE, 1 /* cParms */, &parm);
+                                   DragAndDropSvc::HOST_DND_FN_SET_MODE, 1 /* cParms */, &parm);
     if (RT_FAILURE(rc))
         LogRel(("Error changing drag and drop mode: %Rrc\n", rc));
 

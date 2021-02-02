@@ -775,7 +775,10 @@ void devpciR3SetCfg(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, int32_t iRegister, u
     VBOXSTRICTRC rcStrict = VINF_PDM_PCI_DO_DEFAULT;
     if (pPciDev->Int.s.pfnConfigWrite)
         rcStrict = pPciDev->Int.s.pfnConfigWrite(pPciDev->Int.s.CTX_SUFF(pDevIns), pPciDev, iRegister, cb, u32Value);
-    if (rcStrict == VINF_PDM_PCI_DO_DEFAULT)
+    if (   rcStrict == VINF_PDM_PCI_DO_DEFAULT
+        || (   rcStrict == VINF_SUCCESS
+            && (   iRegister == VBOX_PCI_SECONDARY_BUS
+                || iRegister == VBOX_PCI_SUBORDINATE_BUS)))
         rcStrict = devpciR3CommonConfigWriteWorker(pDevIns, PDMINS_2_DATA_CC(pDevIns, PDEVPCIBUSCC),
                                                    pPciDev, iRegister, cb, u32Value);
     AssertRCSuccess(VBOXSTRICTRC_VAL(rcStrict));
@@ -1893,7 +1896,7 @@ static void ich9pciBiosInitDeviceBARs(PPDMDEVINS pDevIns, PDEVPCIROOT pPciRoot, 
         uint8_t u8ResourceType = devpciR3GetByte(pPciDev, u32Address);
 
         bool fPrefetch =    (u8ResourceType & ((uint8_t)(PCI_ADDRESS_SPACE_MEM_PREFETCH | PCI_ADDRESS_SPACE_IO)))
-                      == PCI_ADDRESS_SPACE_MEM_PREFETCH;
+                         == PCI_ADDRESS_SPACE_MEM_PREFETCH;
         bool f64Bit =    (u8ResourceType & ((uint8_t)(PCI_ADDRESS_SPACE_BAR64 | PCI_ADDRESS_SPACE_IO)))
                       == PCI_ADDRESS_SPACE_BAR64;
         bool fIsPio = ((u8ResourceType & PCI_ADDRESS_SPACE_IO) == PCI_ADDRESS_SPACE_IO);

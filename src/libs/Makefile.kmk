@@ -25,7 +25,9 @@ include $(KBUILD_PATH)/subheader.kmk
 #
 
 # Compression libs used by IPRT and <what was it again?>.
-include $(PATH_SUB_CURRENT)/liblzf-3.4/Makefile.kmk
+if "$(SDK_VBOX_LZF_INCS)" == "$(PATH_ROOT)/src/libs/liblzf-3.4"
+ include $(PATH_SUB_CURRENT)/liblzf-3.4/Makefile.kmk
+endif
 if  !defined(VBOX_ONLY_SDK) \
  && "$(SDK_VBOX_ZLIB_INCS)" == "$(PATH_ROOT)/src/libs/zlib-1.2.11"
  include $(PATH_SUB_CURRENT)/zlib-1.2.11/Makefile.kmk
@@ -55,7 +57,7 @@ if  !defined(VBOX_ONLY_SDK) \
  && (!defined(VBOX_ONLY_ADDITIONS) || !defined(VBOX_ONLY_ADDITIONS_WITHOUT_RTISOMAKER)) \
  && (!defined(VBOX_ONLY_EXTPACKS) || defined(VBOX_NEED_EXTPACK_OPENSSL) || !defined(VBOX_ONLY_EXTPACKS_USE_IMPLIBS)) \
  && ("$(SDK_VBOX_OPENSSL_INCS)" == "$(SDK_VBOX_OPENSSL_VBOX_DEFAULT_INCS)" || defined(VBOX_NEED_EXTPACK_OPENSSL))
- include $(PATH_SUB_CURRENT)/openssl-1.1.1g/Makefile.kmk
+ include $(PATH_SUB_CURRENT)/openssl-1.1.1i/Makefile.kmk
 endif
 
 # libjpeg for VRDP video redirection and ExtPack's DrvHostWebcam

@@ -40,6 +40,7 @@
 #include <iprt/mem.h>
 
 #include <VBoxVideo.h> /* required by DevVGA.h */
+#include <VBoxVideo3D.h>
 
 /* should go BEFORE any other DevVGA include to make all DevVGA.h config defines be visible */
 #include "DevVGA.h"
@@ -3460,6 +3461,499 @@ int vmsvga3dContextDefineOgl(PVGASTATECC pThisCC, uint32_t cid, uint32_t fFlags)
     return VINF_SUCCESS;
 }
 
+#if defined(RT_OS_LINUX)
+/*
+ * HW accelerated graphics output.
+ */
+
+/* Send a notification to the UI. */
+#if 0 /* Unused */
+static int vmsvga3dDrvNotifyHwScreen(PVGASTATECC pThisCC, VBOX3D_NOTIFY_TYPE enmNotification,
+                                     uint32_t idScreen, Pixmap pixmap, void *pvData, size_t cbData)
+{
+    uint8_t au8Buffer[128];
+    AssertLogRelMsgReturn(cbData <= sizeof(au8Buffer) - sizeof(VBOX3DNOTIFY),
+                          ("cbData %zu", cbData),
+                          VERR_INVALID_PARAMETER);
+
+    VBOX3DNOTIFY *p = (VBOX3DNOTIFY *)&au8Buffer[0];
+    p->enmNotification = enmNotification;
+    p->iDisplay = idScreen;
+    p->u32Reserved = 0;
+    p->cbData = cbData + sizeof(uint64_t);
+    /* au8Data consists of a 64 bit pixmap handle followed by notification specific data. */
+    AssertCompile(sizeof(pixmap) <= sizeof(uint64_t));
+    *(uint64_t *)&p->au8Data[0] = (uint64_t)pixmap;
+    memcpy(&p->au8Data[sizeof(uint64_t)], pvData, cbData);
+
+    int rc = pThisCC->pDrv->pfn3DNotifyProcess(pThisCC->pDrv, p);
+    return rc;
+}
+#endif /* Unused */
+
+static void vmsvga3dDrvNotifyHwOverlay(PVGASTATECC pThisCC, VBOX3D_NOTIFY_TYPE enmNotification, uint32_t idScreen)
+{
+    uint8_t au8Buffer[128];
+    VBOX3DNOTIFY *p = (VBOX3DNOTIFY *)&au8Buffer[0];
+    p->enmNotification = enmNotification;
+    p->iDisplay = idScreen;
+    p->u32Reserved = 0;
+    p->cbData = sizeof(uint64_t);
+    *(uint64_t *)&p->au8Data[0] = 0;
+
+    pThisCC->pDrv->pfn3DNotifyProcess(pThisCC->pDrv, p);
+}
+
+/* Get X Window handle of the UI Framebuffer window. */
+static int vmsvga3dDrvQueryWindow(PVGASTATECC pThisCC, uint32_t idScreen, Window *pWindow)
+{
+    uint8_t au8Buffer[128];
+    VBOX3DNOTIFY *p = (VBOX3DNOTIFY *)&au8Buffer[0];
+    p->enmNotification = VBOX3D_NOTIFY_TYPE_HW_OVERLAY_GET_ID;
+    p->iDisplay = idScreen;
+    p->u32Reserved = 0;
+    p->cbData = sizeof(uint64_t);
+    *(uint64_t *)&p->au8Data[0] = 0;
+
+    int rc = pThisCC->pDrv->pfn3DNotifyProcess(pThisCC->pDrv, p);
+    if (RT_SUCCESS(rc))
+    {
+        *pWindow = (Window)*(uint64_t *)&p->au8Data[0];
+    }
+    return rc;
+}
+
+static int ctxErrorHandler(Display *dpy, XErrorEvent *ev)
+{
+    RT_NOREF(dpy);
+    LogRel4(("VMSVGA: XError %d\n", (int)ev->error_code));
+    return 0;
+}
+
+/* Create an overlay X window for the HW accelerated screen. */
+static int vmsvga3dHwScreenCreate(PVMSVGA3DSTATE pState, Window parentWindow, unsigned int cWidth, unsigned int cHeight, VMSVGAHWSCREEN *p)
+{
+    int (*oldHandler)(Display*, XErrorEvent*) = XSetErrorHandler(&ctxErrorHandler);
+
+    int rc = VINF_SUCCESS;
+
+    XWindowAttributes parentAttr;
+    if (XGetWindowAttributes(pState->display, parentWindow, &parentAttr) == 0)
+        return VERR_INVALID_PARAMETER;
+
+    int const idxParentScreen = XScreenNumberOfScreen(parentAttr.screen);
+
+    /*
+     * Create a new GL context, which will be used for copying to the screen.
+     */
+
+    /* FBConfig attributes for the overlay window. */
+    static int const aConfigAttribList[] =
+    {
+        GLX_DRAWABLE_TYPE,               GLX_WINDOW_BIT,         // Must support GLX windows
+        GLX_DOUBLEBUFFER,                False,                  // Double buffering had a much lower performance.
+        GLX_RED_SIZE,                    8,                      // True color RGB with 8 bits per channel.
+        GLX_GREEN_SIZE,                  8,
+        GLX_BLUE_SIZE,                   8,
+        GLX_ALPHA_SIZE,                  8,
+        GLX_STENCIL_SIZE,                0,                      // No stencil buffer
+        GLX_DEPTH_SIZE,                  0,                      // No depth buffer
+        None
+    };
+
+    /* Find a suitable FB config. */
+    int cConfigs = 0;
+    GLXFBConfig *paConfigs = glXChooseFBConfig(pState->display, idxParentScreen, aConfigAttribList, &cConfigs);
+    LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: paConfigs %p cConfigs %d\n", (void *)paConfigs, cConfigs));
+    if (paConfigs)
+    {
+        XVisualInfo *vi = NULL;
+        int i = 0;
+        for (; i < cConfigs; ++i)
+        {
+            /* Use XFree to free the data returned in the previous iteration of this loop. */
+            if (vi)
+                XFree(vi);
+
+            vi = glXGetVisualFromFBConfig(pState->display, paConfigs[i]);
+            if (!vi)
+                continue;
+
+            LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: %p vid %lu screen %d depth %d r %lu g %lu b %lu clrmap %d bitsperrgb %d\n",
+                     (void *)vi->visual, vi->visualid, vi->screen, vi->depth,
+                     vi->red_mask, vi->green_mask, vi->blue_mask, vi->colormap_size, vi->bits_per_rgb));
+
+            /* Same screen as the parent window. */
+            if (vi->screen != idxParentScreen)
+                continue;
+
+            /* Search for 32 bits per pixel. */
+            if (vi->depth != 32)
+                continue;
+
+            /* 8 bits per color component is enough. */
+            if (vi->bits_per_rgb != 8)
+                continue;
+
+            /* Render to pixmap. */
+            int value = 0;
+            glXGetFBConfigAttrib(pState->display, paConfigs[i], GLX_DRAWABLE_TYPE, &value);
+            if (!(value & GLX_WINDOW_BIT))
+                continue;
+
+            /* This FB config can be used. */
+            break;
+        }
+
+        if (i < cConfigs)
+        {
+            /* Found a suitable config with index i. */
+
+            /* Create an overlay window. */
+            XSetWindowAttributes swa;
+            RT_ZERO(swa);
+
+            swa.colormap = XCreateColormap(pState->display, parentWindow, vi->visual, AllocNone);
+            AssertLogRelMsg(swa.colormap, ("XCreateColormap failed"));
+            swa.border_pixel = 0;
+            swa.background_pixel = 0;
+            swa.event_mask = StructureNotifyMask;
+            swa.override_redirect = 1;
+            unsigned long const swaAttrs = CWBorderPixel | CWBackPixel | CWColormap | CWEventMask | CWOverrideRedirect;
+            p->xwindow = XCreateWindow(pState->display, parentWindow,
+                                       0, 0, cWidth, cHeight, 0, vi->depth, InputOutput,
+                                       vi->visual, swaAttrs, &swa);
+            LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: p->xwindow %ld\n", p->xwindow));
+            if (p->xwindow)
+            {
+
+                p->glxctx = glXCreateContext(pState->display, vi, pState->SharedCtx.glxContext, GL_TRUE);
+                LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: p->glxctx %p\n", (void *)p->glxctx));
+                if (p->glxctx)
+                {
+                    XMapWindow(pState->display, p->xwindow);
+                }
+                else
+                {
+                    LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: glXCreateContext failed\n"));
+                    rc = VERR_NOT_SUPPORTED;
+                }
+            }
+            else
+            {
+                LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: XCreateWindow failed\n"));
+                rc = VERR_NOT_SUPPORTED;
+            }
+
+            XSync(pState->display, False);
+        }
+        else
+        {
+            /* A suitable config is not found. */
+            LogRel4(("VMSVGA: vmsvga3dHwScreenCreate: no FBConfig\n"));
+            rc = VERR_NOT_SUPPORTED;
+        }
+
+        if (vi)
+            XFree(vi);
+
+        /* "Use XFree to free the memory returned by glXChooseFBConfig." */
+        XFree(paConfigs);
+    }
+    else
+    {
+        /* glXChooseFBConfig failed. */
+        rc = VERR_NOT_SUPPORTED;
+    }
+
+    XSetErrorHandler(oldHandler);
+    return rc;
+}
+
+/* Destroy a HW accelerated screen. */
+static void vmsvga3dHwScreenDestroy(PVMSVGA3DSTATE pState, VMSVGAHWSCREEN *p)
+{
+    if (p)
+    {
+        LogRel4(("VMSVGA: vmsvga3dHwScreenDestroy: p->xwindow %ld, ctx %p\n", p->xwindow, (void *)p->glxctx));
+        if (p->glxctx)
+        {
+            /* GLX context is changed here, so other code has to set the appropriate context again. */
+            VMSVGA3D_CLEAR_CURRENT_CONTEXT(pState);
+
+            glXMakeCurrent(pState->display, p->xwindow, p->glxctx);
+
+            /* Clean up OpenGL. */
+            if (p->idReadFramebuffer != OPENGL_INVALID_ID)
+                pState->ext.glDeleteFramebuffers(1, &p->idReadFramebuffer);
+            if (p->idDrawFramebuffer != OPENGL_INVALID_ID)
+                pState->ext.glDeleteFramebuffers(1, &p->idDrawFramebuffer);
+            if (p->idScreenTexture != OPENGL_INVALID_ID)
+                glDeleteTextures(1, &p->idScreenTexture);
+
+            glXMakeCurrent(pState->display, None, NULL);
+
+            glXDestroyContext(pState->display, p->glxctx);
+        }
+
+        if (p->xwindow)
+            XDestroyWindow(pState->display, p->xwindow);
+
+        RT_ZERO(*p);
+    }
+}
+
+#define GLCHECK() \
+    do { \
+        int glErr = glGetError(); \
+        if (glErr != GL_NO_ERROR) LogRel4(("VMSVGA: GL error 0x%x @%d\n", glErr, __LINE__)); \
+    } while(0)
+
+int vmsvga3dBackDefineScreen(PVGASTATE pThis, PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen)
+{
+    LogRel4(("VMSVGA: vmsvga3dBackDefineScreen: screen %u\n", pScreen->idScreen));
+
+    PVMSVGA3DSTATE pState = pThisCC->svga.p3dState;
+    AssertReturn(pState, VERR_NOT_SUPPORTED);
+
+    if (!pThis->svga.f3DOverlayEnabled)
+        return VERR_NOT_SUPPORTED;
+
+    Assert(pScreen->pHwScreen == NULL);
+
+    VMSVGAHWSCREEN *p = (VMSVGAHWSCREEN *)RTMemAllocZ(sizeof(VMSVGAHWSCREEN));
+    AssertPtrReturn(p, VERR_NO_MEMORY);
+
+    /* Query the parent window ID from the UI framebuffer.
+     * If it is there then
+     *    the device will create a texture for the screen content and an overlay window to present the screen content.
+     * otherwise
+     *    the device will use the guest VRAM system memory for the screen content.
+     */
+    Window parentWindow;
+    int rc = vmsvga3dDrvQueryWindow(pThisCC, pScreen->idScreen, &parentWindow);
+    if (RT_SUCCESS(rc))
+    {
+        /* Create the hardware accelerated screen. */
+        rc = vmsvga3dHwScreenCreate(pState, parentWindow, pScreen->cWidth, pScreen->cHeight, p);
+        if (RT_SUCCESS(rc))
+        {
+            /*
+             * Setup the OpenGL context of the screen. The context will be used to draw on the screen.
+             */
+
+            /* GLX context is changed here, so other code has to set the appropriate context again. */
+            VMSVGA3D_CLEAR_CURRENT_CONTEXT(pState);
+
+            Bool const fSuccess = glXMakeCurrent(pState->display, p->xwindow, p->glxctx);
+            if (fSuccess)
+            {
+                /* Set GL state. */
+                glClearColor(0, 0, 0, 1);
+                glEnable(GL_TEXTURE_2D);
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+
+                /* The RGBA texture which hold the screen content. */
+                glGenTextures(1, &p->idScreenTexture); GLCHECK();
+                glBindTexture(GL_TEXTURE_2D, p->idScreenTexture); GLCHECK();
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); GLCHECK();
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST); GLCHECK();
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, pScreen->cWidth, pScreen->cHeight, 0,
+                             GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, NULL); GLCHECK();
+
+                /* Create read and draw framebuffer objects for this screen. */
+                pState->ext.glGenFramebuffers(1, &p->idReadFramebuffer); GLCHECK();
+                pState->ext.glGenFramebuffers(1, &p->idDrawFramebuffer); GLCHECK();
+
+                /* Work in screen coordinates. */
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                glOrtho(0, pScreen->cWidth, 0, pScreen->cHeight, -1, 1);
+                glMatrixMode(GL_PROJECTION);
+                glLoadIdentity();
+
+                /* Clear the texture. */
+                pState->ext.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, p->idDrawFramebuffer); GLCHECK();
+                pState->ext.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                                   p->idScreenTexture, 0); GLCHECK();
+
+                glClear(GL_COLOR_BUFFER_BIT);
+
+                pState->ext.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0); GLCHECK();
+
+                glXMakeCurrent(pState->display, None, NULL);
+
+                XSync(pState->display, False);
+
+                vmsvga3dDrvNotifyHwOverlay(pThisCC, VBOX3D_NOTIFY_TYPE_HW_OVERLAY_CREATED, pScreen->idScreen);
+            }
+            else
+            {
+                LogRel4(("VMSVGA: vmsvga3dBackDefineScreen: failed to set current context\n"));
+                rc = VERR_NOT_SUPPORTED;
+            }
+        }
+    }
+    else
+    {
+        LogRel4(("VMSVGA: vmsvga3dBackDefineScreen: no framebuffer\n"));
+    }
+
+    if (RT_SUCCESS(rc))
+    {
+        LogRel(("VMSVGA: Using HW accelerated screen %u\n", pScreen->idScreen));
+        pScreen->pHwScreen = p;
+    }
+    else
+    {
+        LogRel4(("VMSVGA: vmsvga3dBackDefineScreen: %Rrc\n", rc));
+        vmsvga3dHwScreenDestroy(pState, p);
+        RTMemFree(p);
+    }
+
+    return rc;
+}
+
+int vmsvga3dBackDestroyScreen(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen)
+{
+    LogRel4(("VMSVGA: vmsvga3dBackDestroyScreen: screen %u\n", pScreen->idScreen));
+
+    PVMSVGA3DSTATE pState = pThisCC->svga.p3dState;
+    AssertReturn(pState, VERR_NOT_SUPPORTED);
+
+    int (*oldHandler)(Display*, XErrorEvent*) = XSetErrorHandler(&ctxErrorHandler);
+
+    VMSVGAHWSCREEN *p = pScreen->pHwScreen;
+    if (p)
+    {
+        pScreen->pHwScreen = NULL;
+
+        vmsvga3dDrvNotifyHwOverlay(pThisCC, VBOX3D_NOTIFY_TYPE_HW_OVERLAY_DESTROYED, pScreen->idScreen);
+
+        vmsvga3dHwScreenDestroy(pState, p);
+        RTMemFree(p);
+    }
+
+    XSetErrorHandler(oldHandler);
+
+    return VINF_SUCCESS;
+}
+
+/* Blit a surface to the GLX pixmap. */
+int vmsvga3dBackSurfaceBlitToScreen(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen,
+                                    SVGASignedRect destRect, SVGA3dSurfaceImageId srcImage,
+                                    SVGASignedRect srcRect, uint32_t cRects, SVGASignedRect *paRects)
+{
+    PVMSVGA3DSTATE pState = pThisCC->svga.p3dState;
+    AssertReturn(pState, VERR_NOT_SUPPORTED);
+
+    VMSVGAHWSCREEN *p = pScreen->pHwScreen;
+    AssertReturn(p, VERR_NOT_SUPPORTED);
+
+    PVMSVGA3DSURFACE pSurface;
+    int rc = vmsvga3dSurfaceFromSid(pState, srcImage.sid, &pSurface);
+    AssertRCReturn(rc, rc);
+
+    if (!VMSVGA3DSURFACE_HAS_HW_SURFACE(pSurface))
+    {
+        LogFunc(("src sid=%u flags=0x%x format=%d -> create texture\n", srcImage.sid, pSurface->surfaceFlags, pSurface->format));
+        rc = vmsvga3dBackCreateTexture(pState, &pState->SharedCtx, VMSVGA3D_SHARED_CTX_ID, pSurface);
+        AssertRCReturn(rc, rc);
+    }
+
+    AssertReturn(pSurface->enmOGLResType == VMSVGA3D_OGLRESTYPE_TEXTURE, VERR_NOT_SUPPORTED);
+
+    PVMSVGA3DMIPMAPLEVEL pMipLevel;
+    rc = vmsvga3dMipmapLevel(pSurface, srcImage.face, srcImage.mipmap, &pMipLevel);
+    AssertRCReturn(rc, rc);
+
+    /** @todo Implement. */
+    RT_NOREF(cRects, paRects);
+
+    /* GLX context is changed here, so other code has to set appropriate context again. */
+    VMSVGA3D_CLEAR_CURRENT_CONTEXT(pState);
+
+    int (*oldHandler)(Display*, XErrorEvent*) = XSetErrorHandler(&ctxErrorHandler);
+
+    Bool fSuccess = glXMakeCurrent(pState->display, p->xwindow, p->glxctx);
+    if (fSuccess)
+    {
+        /* Activate the read and draw framebuffer objects. */
+        pState->ext.glBindFramebuffer(GL_READ_FRAMEBUFFER, p->idReadFramebuffer); GLCHECK();
+        pState->ext.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, p->idDrawFramebuffer); GLCHECK();
+
+        /* Bind the source and destination objects to the right place. */
+        pState->ext.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                           pSurface->oglId.texture, 0); GLCHECK();
+        pState->ext.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                           p->idScreenTexture, 0); GLCHECK();
+
+        pState->ext.glBlitFramebuffer(srcRect.left,
+                                      srcRect.top,
+                                      srcRect.right,
+                                      srcRect.bottom,
+                                      destRect.left,
+                                      destRect.top,
+                                      destRect.right,
+                                      destRect.bottom,
+                                      GL_COLOR_BUFFER_BIT,
+                                      GL_NEAREST); GLCHECK();
+
+        /* Reset the frame buffer association */
+        pState->ext.glBindFramebuffer(GL_FRAMEBUFFER, 0); GLCHECK();
+
+        /* Update the overlay window. */
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glBindTexture(GL_TEXTURE_2D, p->idScreenTexture); GLCHECK();
+
+        GLint const w = pScreen->cWidth;
+        GLint const h = pScreen->cHeight;
+
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, 0.0f); glVertex2i(0, h);
+        glTexCoord2f(0.0f, 1.0f); glVertex2i(0, 0);
+        glTexCoord2f(1.0f, 1.0f); glVertex2i(w, 0);
+        glTexCoord2f(1.0f, 0.0f); glVertex2i(w, h);
+        glEnd(); GLCHECK();
+
+        glBindTexture(GL_TEXTURE_2D, 0); GLCHECK();
+
+        glXMakeCurrent(pState->display, None, NULL);
+    }
+    else
+    {
+        LogRel4(("VMSVGA: vmsvga3dBackSurfaceBlitToScreen: screen %u, glXMakeCurrent for pixmap failed\n", pScreen->idScreen));
+    }
+
+    XSetErrorHandler(oldHandler);
+
+    return VINF_SUCCESS;
+}
+
+#else /* !RT_OS_LINUX */
+
+int vmsvga3dBackDefineScreen(PVGASTATE pThis, PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen)
+{
+    RT_NOREF(pThis, pThisCC, pScreen);
+    return VERR_NOT_IMPLEMENTED;
+}
+
+int vmsvga3dBackDestroyScreen(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen)
+{
+    RT_NOREF(pThisCC, pScreen);
+    return VERR_NOT_IMPLEMENTED;
+}
+
+int vmsvga3dBackSurfaceBlitToScreen(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen,
+                                    SVGASignedRect destRect, SVGA3dSurfaceImageId srcImage,
+                                    SVGASignedRect srcRect, uint32_t cRects, SVGASignedRect *paRects)
+{
+    RT_NOREF(pThisCC, pScreen, destRect, srcImage, srcRect, cRects, paRects);
+    return VERR_NOT_IMPLEMENTED;
+}
+#endif
 
 /**
  * Create a new 3d context
@@ -4107,8 +4601,8 @@ int vmsvga3dSetRenderState(PVGASTATECC pThisCC, uint32_t cid, uint32_t cRenderSt
                 AssertMsgFailedReturn(("Unexpected fill mode %d\n", mode.s.mode), VERR_INTERNAL_ERROR);
                 break;
             }
-            /* @note only front and back faces */
-            Assert(mode.s.face == SVGA3D_FACE_FRONT_BACK);
+            /* Only front and back faces. Also recent Mesa guest drivers initialize the 'face' to zero. */
+            ASSERT_GUEST(mode.s.face == SVGA3D_FACE_FRONT_BACK || mode.s.face == SVGA3D_FACE_INVALID);
             glPolygonMode(GL_FRONT_AND_BACK, val);
             VMSVGA3D_CHECK_LAST_ERROR(pState, pContext);
             break;
@@ -6841,7 +7335,7 @@ int vmsvga3dShaderDefine(PVGASTATECC pThisCC, uint32_t cid, uint32_t shid, SVGA3
 
     AssertReturn(shid < SVGA3D_MAX_SHADER_IDS, VERR_INVALID_PARAMETER);
 
-    rc = vmsvga3dShaderParse(cbData, pShaderData);
+    rc = vmsvga3dShaderParse(type, cbData, pShaderData);
     if (RT_FAILURE(rc))
     {
         AssertRC(rc);

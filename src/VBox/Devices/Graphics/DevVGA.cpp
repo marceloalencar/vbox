@@ -913,21 +913,6 @@ static uint32_t calc_line_pitch(uint16_t bpp, uint16_t width)
     return aligned_pitch;
 }
 
-# ifdef SOME_UNUSED_FUNCTION
-/* Calculate line width in pixels based on bit depth and pitch. */
-static uint32_t calc_line_width(uint16_t bpp, uint32_t pitch)
-{
-    uint32_t    width;
-
-    if (bpp <= 4)
-        width = pitch << 1;
-    else
-        width = pitch / ((bpp + 7) >> 3);
-
-    return width;
-}
-# endif
-
 static void recalculate_data(PVGASTATE pThis)
 {
     uint16_t cBPP        = pThis->vbe_regs[VBE_DISPI_INDEX_BPP];
@@ -938,7 +923,8 @@ static void recalculate_data(PVGASTATE pThis)
     uint32_t cbLinePitch = calc_line_pitch(cBPP, cVirtWidth);
     if (!cbLinePitch)
         cbLinePitch      = calc_line_pitch(cBPP, cX);
-    Assert(cbLinePitch != 0);
+    if (!cbLinePitch)
+        return;
     uint32_t cVirtHeight = pThis->vram_size / cbLinePitch;
     uint16_t offX        = pThis->vbe_regs[VBE_DISPI_INDEX_X_OFFSET];
     uint16_t offY        = pThis->vbe_regs[VBE_DISPI_INDEX_Y_OFFSET];
@@ -4765,7 +4751,7 @@ static DECLCALLBACK(void *) vgaR3PortQueryInterface(PPDMIBASE pInterface, const 
     PVGASTATECC pThisCC = RT_FROM_MEMBER(pInterface, VGASTATECC, IBase);
     PDMIBASE_RETURN_INTERFACE(pszIID, PDMIBASE, &pThisCC->IBase);
     PDMIBASE_RETURN_INTERFACE(pszIID, PDMIDISPLAYPORT, &pThisCC->IPort);
-# if defined(VBOX_WITH_HGSMI) && (defined(VBOX_WITH_VIDEOHWACCEL) || defined(VBOX_WITH_CRHGSMI))
+# if defined(VBOX_WITH_HGSMI) && defined(VBOX_WITH_VIDEOHWACCEL)
     PDMIBASE_RETURN_INTERFACE(pszIID, PDMIDISPLAYVBVACALLBACKS, &pThisCC->IVBVACallbacks);
 # endif
     PDMIBASE_RETURN_INTERFACE(pszIID, PDMILEDPORTS, &pThisCC->ILeds);
@@ -6186,6 +6172,20 @@ static DECLCALLBACK(void) vgaR3PowerOn(PPDMDEVINS pDevIns)
 
 
 /**
+ * @interface_method_impl{PDMDEVREG,pfnPowerOff}
+ */
+static DECLCALLBACK(void) vgaR3PowerOff(PPDMDEVINS pDevIns)
+{
+    PVGASTATE   pThis = PDMDEVINS_2_DATA(pDevIns, PVGASTATE);
+    PVGASTATECC pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
+    RT_NOREF(pThis, pThisCC);
+# ifdef VBOX_WITH_VMSVGA
+    vmsvgaR3PowerOff(pDevIns);
+# endif
+}
+
+
+/**
  * @interface_method_impl{PDMDEVREG,pfnRelocate}
  */
 static DECLCALLBACK(void) vgaR3Relocate(PPDMDEVINS pDevIns, RTGCINTPTR offDelta)
@@ -6466,6 +6466,7 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
 # endif
 # ifdef VBOX_WITH_VMSVGA3D
                                             "|VMSVGA3dEnabled"
+                                            "|VMSVGA3dOverlayEnabled"
 # endif
                                             "|SuppressNewYearSplash"
                                             "|3DEnabled";
@@ -6521,6 +6522,10 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
     rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "VMSVGA3dEnabled", &pThis->svga.f3DEnabled, false);
     AssertLogRelRCReturn(rc, rc);
     Log(("VMSVGA: VMSVGA3dEnabled = %d\n", pThis->svga.f3DEnabled));
+
+    rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "VMSVGA3dOverlayEnabled", &pThis->svga.f3DOverlayEnabled, false);
+    AssertLogRelRCReturn(rc, rc);
+    Log(("VMSVGA: VMSVGA3dOverlayEnabled = %d\n", pThis->svga.f3DOverlayEnabled));
 # endif
 
 # ifdef VBOX_WITH_VMSVGA
@@ -6590,20 +6595,18 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
     pThisCC->IPort.pfnUpdateDisplayRect = vgaR3PortUpdateDisplayRect;
     pThisCC->IPort.pfnCopyRect          = vgaR3PortCopyRect;
     pThisCC->IPort.pfnSetRenderVRAM     = vgaR3PortSetRenderVRAM;
-# ifdef VBOX_WITH_VMSVGA
-    pThisCC->IPort.pfnSetViewport       = vmsvgaR3PortSetViewport;
-# else
     pThisCC->IPort.pfnSetViewport       = NULL;
+    pThisCC->IPort.pfnReportMonitorPositions = NULL;
+# ifdef VBOX_WITH_VMSVGA
+    if (pThis->fVMSVGAEnabled)
+    {
+        pThisCC->IPort.pfnSetViewport = vmsvgaR3PortSetViewport;
+        pThisCC->IPort.pfnReportMonitorPositions = vmsvgaR3PortReportMonitorPositions;
+    }
 # endif
     pThisCC->IPort.pfnSendModeHint      = vbvaR3PortSendModeHint;
     pThisCC->IPort.pfnReportHostCursorCapabilities = vgaR3PortReportHostCursorCapabilities;
     pThisCC->IPort.pfnReportHostCursorPosition = vgaR3PortReportHostCursorPosition;
-# ifdef VBOX_WITH_VMSVGA
-    pThisCC->IPort.pfnReportMonitorPositions = vmsvgaR3PortReportMonitorPositions;
-# else
-    pThisCC->IPort.pfnReportMonitorPositions = NULL;
-# endif
-
 
 # if defined(VBOX_WITH_HGSMI) && defined(VBOX_WITH_VIDEOHWACCEL)
     pThisCC->IVBVACallbacks.pfnVHWACommandCompleteAsync = vbvaR3VHWACommandCompleteAsync;
@@ -6932,6 +6935,8 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
                 * pixelWidth;
         if (reqSize >= pThis->vram_size)
             continue;
+        if (!reqSize)
+            continue;
         if (   mode_info_list[i].info.XResolution > maxBiosXRes
             || mode_info_list[i].info.YResolution > maxBiosYRes)
             continue;
@@ -6993,6 +6998,11 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
                     ||  (cBits != 8 && cBits != 16 && cBits != 24 && cBits != 32))
                 {
                     AssertMsgFailed(("Configuration error: Invalid mode data '%s' for '%s'! cBits=%d\n", pszExtraData, szExtraDataKey, cBits));
+                    return VERR_VGA_INVALID_CUSTOM_MODE;
+                }
+                if (!cx || !cy)
+                {
+                    AssertMsgFailed(("Configuration error: Invalid mode data '%s' for '%s'! cx=%u, cy=%u\n", pszExtraData, szExtraDataKey, cx, cy));
                     return VERR_VGA_INVALID_CUSTOM_MODE;
                 }
                 cbPitch = calc_line_pitch(cBits, cx);
@@ -7445,7 +7455,7 @@ const PDMDEVREG g_DeviceVga =
     /* .pfnDetach = */              vgaDetach,
     /* .pfnQueryInterface = */      NULL,
     /* .pfnInitComplete = */        NULL,
-    /* .pfnPowerOff = */            NULL,
+    /* .pfnPowerOff = */            vgaR3PowerOff,
     /* .pfnSoftReset = */           NULL,
     /* .pfnReserved0 = */           NULL,
     /* .pfnReserved1 = */           NULL,

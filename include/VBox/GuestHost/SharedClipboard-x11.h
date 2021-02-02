@@ -35,6 +35,9 @@
 
 #include <VBox/GuestHost/SharedClipboard.h>
 
+/** Enables the Xt busy / update handling. */
+#define VBOX_WITH_SHARED_CLIPBOARD_XT_BUSY      1
+
 /**
  * Enumeration for all clipboard formats which we support on X11.
  */
@@ -79,11 +82,14 @@ typedef struct _SHCLX11CTX
     PSHCLCONTEXT pFrontend;
     /** Is an X server actually available? */
     bool fHaveX11;
-    /** The X Toolkit application context structure */
-    XtAppContext appContext;
+    /** The X Toolkit application context structure. */
+    XtAppContext pAppContext;
 
     /** We have a separate thread to wait for window and clipboard events. */
     RTTHREAD Thread;
+    /** Flag indicating that the thread is in a started state. */
+    bool fThreadStarted;
+
     /** The X Toolkit widget which we use as our clipboard client.  It is never made visible. */
     Widget pWidget;
 
@@ -91,14 +97,14 @@ typedef struct _SHCLX11CTX
     bool fGrabClipboardOnStart;
 
     /** The best text format X11 has to offer, as an index into the formats table. */
-    SHCLX11FMTIDX X11TextFormat;
+    SHCLX11FMTIDX idxFmtText;
     /** The best bitmap format X11 has to offer, as an index into the formats table. */
-    SHCLX11FMTIDX X11BitmapFormat;
+    SHCLX11FMTIDX idxFmtBmp;
     /** The best HTML format X11 has to offer, as an index into the formats table. */
-    SHCLX11FMTIDX X11HTMLFormat;
+    SHCLX11FMTIDX idxFmtHTML;
 #ifdef VBOX_WITH_SHARED_CLIPBOARD_TRANSFERS
     /** The best HTML format X11 has to offer, as an index into the formats table. */
-    SHCLX11FMTIDX X11URIListFormat;
+    SHCLX11FMTIDX idxFmtURI;
 #endif
     /** What kind of formats does VBox have to offer? */
     SHCLFORMATS vboxFormats;
@@ -116,6 +122,7 @@ typedef struct _SHCLX11CTX
     void (*fixesSelectInput)(Display *, Window, Atom, unsigned long);
     /** The first XFixes event number. */
     int fixesEventBase;
+#ifdef VBOX_WITH_SHARED_CLIPBOARD_XT_BUSY
     /** XtGetSelectionValue on some versions of libXt isn't re-entrant
      * so block overlapping requests on this flag. */
     bool fXtBusy;
@@ -123,6 +130,7 @@ typedef struct _SHCLX11CTX
      * an update later - the first callback should check and clear this flag
      * before processing the callback event. */
     bool fXtNeedsUpdate;
+#endif
 } SHCLX11CTX, *PSHCLX11CTX;
 
 /** @name Shared Clipboard APIs for X11.
@@ -136,7 +144,7 @@ int ShClX11ReportFormatsToX11(PSHCLX11CTX pCtx, SHCLFORMATS vboxFormats);
 int ShClX11ReadDataFromX11(PSHCLX11CTX pCtx, SHCLFORMATS vboxFormat, CLIPREADCBREQ *pReq);
 /** @} */
 
-/** @name Shared Clipboard callbacks exported by the X11 APIs.
+/** @name Shared Clipboard callbacks which have to be implemented the X11 backend and host service.
  *  @{
  */
 DECLCALLBACK(int)  ShClX11RequestDataForX11Callback(SHCLCONTEXT *pCtx, SHCLFORMAT Format, void **ppv, uint32_t *pcb);

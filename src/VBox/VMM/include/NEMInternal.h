@@ -227,6 +227,8 @@ typedef struct NEMCPU
     uint32_t                    u32Magic;
     /** Whether \#UD needs to be intercepted and presented to GIM. */
     bool                        fGIMTrapXcptUD : 1;
+    /** Whether \#GP needs to be intercept for mesa driver workaround. */
+    bool                        fTrapXcptGpForLovelyMesaDrv: 1;
 #ifdef RT_OS_WINDOWS
     /** The current state of the interrupt windows (NEM_WIN_INTW_F_XXX). */
     uint8_t                     fCurrentInterruptWindows;
@@ -304,6 +306,8 @@ typedef struct NEMCPU
     STAMCOUNTER                 StatExitException;
     STAMCOUNTER                 StatExitExceptionBp;
     STAMCOUNTER                 StatExitExceptionDb;
+    STAMCOUNTER                 StatExitExceptionGp;
+    STAMCOUNTER                 StatExitExceptionGpMesa;
     STAMCOUNTER                 StatExitExceptionUd;
     STAMCOUNTER                 StatExitExceptionUdHandled;
     STAMCOUNTER                 StatExitUnrecoverable;

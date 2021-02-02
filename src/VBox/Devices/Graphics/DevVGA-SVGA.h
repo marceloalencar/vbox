@@ -71,6 +71,7 @@
 #define VMSVGA_FIFO_EXTCMD_LOADSTATE                    3
 #define VMSVGA_FIFO_EXTCMD_RESET                        4
 #define VMSVGA_FIFO_EXTCMD_UPDATE_SURFACE_HEAP_BUFFERS  5
+#define VMSVGA_FIFO_EXTCMD_POWEROFF                     6
 
 /** Size of the region to backup when switching into svga mode. */
 #define VMSVGA_VGA_FB_BACKUP_SIZE                       _512K
@@ -126,6 +127,10 @@ typedef struct VMSVGAVIEWPORT
     uint32_t        uAlignment;
 } VMSVGAVIEWPORT;
 
+#ifdef VBOX_WITH_VMSVGA3D
+typedef struct VMSVGAHWSCREEN *PVMSVGAHWSCREEN;
+#endif
+
 /**
  * Screen object state.
  */
@@ -148,6 +153,10 @@ typedef struct VMSVGASCREENOBJECT
     uint32_t    cBpp;
     bool        fDefined;
     bool        fModified;
+#ifdef VBOX_WITH_VMSVGA3D
+    /** Pointer to the HW accelerated (3D) screen data. */
+    R3PTRTYPE(PVMSVGAHWSCREEN) pHwScreen;
+#endif
 } VMSVGASCREENOBJECT;
 
 /** Pointer to the private VMSVGA ring-3 state structure.
@@ -212,7 +221,9 @@ typedef struct VMSVGAState
     /** The legacy GFB mode registers. If used, they correspond to screen 0. */
     /** True when the guest modifies the GFB mode registers. */
     bool                        fGFBRegisters;
-    bool                        afPadding[2];
+    /** SVGA 3D overlay enabled or not. */
+    bool                        f3DOverlayEnabled;
+    bool                        afPadding[1];
     uint32_t                    uWidth;
     uint32_t                    uHeight;
     uint32_t                    uBpp;

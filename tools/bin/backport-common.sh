@@ -48,6 +48,33 @@ BranchDirToName()
     esac
 }
 
+AddRevision()
+{
+    if test -z "${MY_REVISIONS}"; then
+        MY_REVISIONS=$1
+        MY_REVISION_COUNT=1
+    else
+        MY_REVISIONS="${MY_REVISIONS} $1"
+        MY_REVISION_COUNT=$(${MY_EXPR} ${MY_REVISION_COUNT} + 1)
+    fi
+}
+
+AddRevisionRange()
+{
+    MY_REV=$1
+    MY_REV_FIRST=${MY_REV%-*}
+    MY_REV_LAST=${MY_REV#*-}
+    if test -z "${MY_REV_FIRST}" -o -z "${MY_REV_LAST}" -o '(' '!' "${MY_REV_FIRST}" -lt "${MY_REV_LAST}" ')'; then
+        echo "error: Failed to parse revision range: MY_REV_FIRST=${MY_REV_FIRST} MY_REV_LAST=${MY_REV_LAST} MY_REV=${MY_REV}"
+        exit 1
+    fi
+    MY_REV=${MY_REV_FIRST}
+    while test ${MY_REV} -le ${MY_REV_LAST};
+    do
+        AddRevision "${MY_REV}"
+        MY_REV=$(${MY_EXPR} ${MY_REV} + 1)
+    done
+}
 
 #
 # Figure default branch given the script location.
@@ -78,23 +105,21 @@ do
     ARG=$1
     shift
     case "${ARG}" in
-        r[0-9][0-9]*)
+        r[0-9][0-9][0-9][0-9][0-9]|r[0-9][0-9][0-9][0-9][0-9][0-9]|r[0-9][0-9][0-9][0-9][0-9][0-9][0-9])
             MY_REV=`echo ${ARG} | "${MY_SED}" -e 's/^r//'`
-            if test -z "${MY_REVISIONS}"; then
-                MY_REVISIONS=${MY_REV}
-            else
-                MY_REVISIONS="${MY_REVISIONS} ${MY_REV}"
-            fi
-            MY_REVISION_COUNT=`${MY_EXPR} ${MY_REVISION_COUNT} + 1`
+            AddRevision ${MY_REV}
             ;;
 
-        [0-9][0-9]*)
-            if test -z "${MY_REVISIONS}"; then
-                MY_REVISIONS=${ARG}
-            else
-                MY_REVISIONS="${MY_REVISIONS} ${ARG}"
-            fi
-            MY_REVISION_COUNT=`${MY_EXPR} ${MY_REVISION_COUNT} + 1`
+        [0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+            AddRevision ${ARG}
+            ;;
+
+        [0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+            AddRevisionRange ${ARG}
+            ;;
+        r[0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9]|r[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]|r[0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+            MY_REV=`echo "${ARG}" | "${MY_SED}" -e 's/^r//'`
+            AddRevisionRange ${MY_REV}
             ;;
 
         --trunk-dir)
@@ -201,7 +226,7 @@ fi
 #
 # Stop if no revisions specified.
 #
-if test -z "${MY_REVISIONS}"; then
+if test -z "${MY_REVISIONS}" -a "${MY_SCRIPT_NAME}" '!=' "backport-commit.sh"; then
     echo "error: No revisions specified" 1>&2;
     exit 2;
 fi

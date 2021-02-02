@@ -1167,6 +1167,36 @@ static SSMFIELD const g_aVMSVGA3DSTATEFields[] =
 };
 #endif /* VMSVGA3D_INCL_STRUCTURE_DESCRIPTORS */
 
+/**
+ * VMSVGA3d screen data.
+ *
+ * Allocated on the heap and pointed to by VMSVGASCREENOBJECT::pHwScreen.
+ */
+typedef struct VMSVGAHWSCREEN
+{
+    uint32_t u32Reserved0;
+#if defined(RT_OS_LINUX)
+    /* OpenGL context, which is used for the screen updates. */
+    GLXContext glxctx;
+
+    /* The overlay window. */
+    Window xwindow;
+
+    /* The RGBA texture which hold the screen content. */
+    GLuint idScreenTexture;
+
+    /* Read and draw framebuffer objects for copying a surface to the screen texture. */
+    GLuint idReadFramebuffer;
+    GLuint idDrawFramebuffer;
+#endif
+} VMSVGAHWSCREEN;
+
+int vmsvga3dBackDefineScreen(PVGASTATE pThis, PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen);
+int vmsvga3dBackDestroyScreen(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen);
+
+int vmsvga3dBackSurfaceBlitToScreen(PVGASTATECC pThisCC, VMSVGASCREENOBJECT *pScreen,
+                                    SVGASignedRect destRect, SVGA3dSurfaceImageId srcImage,
+                                    SVGASignedRect srcRect, uint32_t cRects, SVGASignedRect *paRects);
 
 #ifdef VMSVGA3D_DIRECT3D
 D3DFORMAT vmsvga3dSurfaceFormat2D3D(SVGA3dSurfaceFormat format);
@@ -1393,7 +1423,7 @@ void FormatConvReadTexture(PVMSVGA3DSTATE pState,
                            uint32_t iMipmap);
 #endif
 
-int vmsvga3dShaderParse(uint32_t cbShaderData, uint32_t const *pShaderData);
+int vmsvga3dShaderParse(SVGA3dShaderType type, uint32_t cbShaderData, uint32_t const *pShaderData);
 void vmsvga3dShaderLogRel(char const *pszMsg, SVGA3dShaderType type, uint32_t cbShaderData, uint32_t const *pShaderData);
 
 #endif /* !VBOX_INCLUDED_SRC_Graphics_DevVGA_SVGA3d_internal_h */

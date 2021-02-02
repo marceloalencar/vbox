@@ -2990,7 +2990,7 @@
     <message>
         <source>Cloud Network</source>
         <comment>NetworkAttachmentType</comment>
-        <translation>Cloudnetwerk</translation>
+        <translation type="vanished">Cloudnetwerk</translation>
     </message>
     <message>
         <source>PCnet-PCI II (Am79C970A)</source>
@@ -3344,24 +3344,24 @@
         <translation>PB</translation>
     </message>
     <message>
-        <source>IDE Primary Master</source>
+        <source>IDE Primary Device 0</source>
         <comment>StorageSlot</comment>
-        <translation>IDE Primaire Master</translation>
+        <translation type="unfinished">IDE Primaire Master</translation>
     </message>
     <message>
-        <source>IDE Primary Slave</source>
+        <source>IDE Primary Device 1</source>
         <comment>StorageSlot</comment>
-        <translation>IDE Primaire Slave</translation>
+        <translation type="unfinished">IDE Primaire Slave</translation>
     </message>
     <message>
-        <source>IDE Secondary Master</source>
+        <source>IDE Secondary Device 0</source>
         <comment>StorageSlot</comment>
-        <translation>IDE tweede Master</translation>
+        <translation type="unfinished">IDE tweede Master</translation>
     </message>
     <message>
-        <source>IDE Secondary Slave</source>
+        <source>IDE Secondary Device 1</source>
         <comment>StorageSlot</comment>
-        <translation>IDE tweede Slave</translation>
+        <translation type="unfinished">IDE tweede Slave</translation>
     </message>
     <message>
         <source>SATA Port %1</source>
@@ -4049,18 +4049,23 @@
     </message>
     <message>
         <source>Acquire cloud instances ...</source>
-        <translation type="unfinished">Verkrijgen cloud-instances...</translation>
+        <translation>Verkrijgen cloud-instances...</translation>
     </message>
     <message>
         <source>Acquire cloud instance info ...</source>
-        <translation type="unfinished"></translation>
+        <translation>Verkrijgen cloud-instances info...</translation>
     </message>
     <message>
         <source>Pause instance ...</source>
-        <translation type="unfinished"></translation>
+        <translation>Pauzeren instance ...</translation>
     </message>
     <message>
         <source>Start instance ...</source>
+        <translation>Starten instance ...</translation>
+    </message>
+    <message>
+        <source>Cloud Network [EXPERIMENTAL]</source>
+        <comment>NetworkAttachmentType</comment>
         <translation type="unfinished"></translation>
     </message>
 </context>
@@ -13931,20 +13936,20 @@
     <name>UIVirtualMachineItemCloud</name>
     <message>
         <source>Loading ...</source>
-        <translation type="unfinished"></translation>
+        <translation>Laden ...</translation>
     </message>
     <message>
         <source>Up-To-Date</source>
-        <translation type="unfinished"></translation>
+        <translation>Up-to-date</translation>
     </message>
     <message>
         <source>&lt;nobr&gt;&lt;b&gt;%1&lt;/b&gt;&lt;/nobr&gt;&lt;br&gt;&lt;nobr&gt;Inaccessible&lt;/nobr&gt;</source>
         <comment>Inaccessible VM tooltip (name)</comment>
-        <translation type="unfinished"></translation>
+        <translation>&lt;nobr&gt;&lt;b&gt;%1&lt;/b&gt;&lt;/nobr&gt;&lt;br&gt;&lt;nobr&gt;Niet benaderbaar&lt;/nobr&gt;</translation>
     </message>
     <message>
         <source>Inaccessible</source>
-        <translation type="unfinished">Niet benaderbaar</translation>
+        <translation>Niet benaderbaar</translation>
     </message>
 </context>
 <context>
@@ -13952,16 +13957,16 @@
     <message>
         <source>&lt;nobr&gt;%1&lt;br&gt;&lt;/nobr&gt;&lt;nobr&gt;%2 since %3&lt;/nobr&gt;&lt;br&gt;&lt;nobr&gt;Session %4&lt;/nobr&gt;</source>
         <comment>VM tooltip (name, last state change, session state)</comment>
-        <translation type="unfinished">&lt;nobr&gt;%1&lt;br&gt;&lt;/nobr&gt;&lt;nobr&gt;%2 sinds %3&lt;/nobr&gt;&lt;br&gt;&lt;nobr&gt;Sessie %4&lt;/nobr&gt;</translation>
+        <translation>&lt;nobr&gt;%1&lt;br&gt;&lt;/nobr&gt;&lt;nobr&gt;%2 sinds %3&lt;/nobr&gt;&lt;br&gt;&lt;nobr&gt;Sessie %4&lt;/nobr&gt;</translation>
     </message>
     <message>
         <source>&lt;nobr&gt;&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;&lt;/nobr&gt;&lt;nobr&gt;Inaccessible since %2&lt;/nobr&gt;</source>
         <comment>Inaccessible VM tooltip (name, last state change)</comment>
-        <translation type="unfinished">&lt;nobr&gt;&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;&lt;/nobr&gt;&lt;nobr&gt;Niet benaderbaar sinds %2&lt;/nobr&gt;</translation>
+        <translation>&lt;nobr&gt;&lt;b&gt;%1&lt;/b&gt;&lt;br&gt;&lt;/nobr&gt;&lt;nobr&gt;Niet benaderbaar sinds %2&lt;/nobr&gt;</translation>
     </message>
     <message>
         <source>Inaccessible</source>
-        <translation type="unfinished">Niet benaderbaar</translation>
+        <translation>Niet benaderbaar</translation>
     </message>
 </context>
 <context>

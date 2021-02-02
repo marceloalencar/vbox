@@ -34,6 +34,38 @@ MY_SCRIPT_NAME="backport-commit.sh"
 . "${MY_SCRIPT_DIR}/backport-common.sh"
 
 #
+# If no revisions was given, try figure it out from the svn:merge-info
+# property.
+#
+if test -z "${MY_REVISIONS}"; then
+    MY_REV_TMP=backport-revisions.tmp
+    if ! svn di --properties-only --depth empty "${MY_BRANCH_DIR}" > "${MY_REV_TMP}"; then
+        echo "error: failed to get revisions from svn:mergeinfo (svn)"
+        exit 1;
+    fi
+    for MY_REV in $("${MY_SED}" -e '/ *Merged \//!d' -e "s/^ [^:]*:[r]*//" -e 's/,[r]*/ /g' "${MY_REV_TMP}");
+    do
+        case "${MY_REV}" in
+            [0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+                AddRevision "${MY_REV}"
+                ;;
+            [0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]|[0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9][0-9])
+                AddRevisionRange "${MY_REV}"
+                ;;
+
+            *)  echo "error: failed to get revisions from svn:mergeinfo - does not grok: ${MY_ARG}"
+                exit 1;;
+        esac
+    done
+    "${MY_RM}" -f -- "${MY_REV_TMP}"
+    if test -z "${MY_REVISIONS}"; then
+        echo "error: No backported revisions found";
+        exit 1;
+    fi
+    echo "info: Detected revisions: ${MY_REVISIONS}"
+fi
+
+#
 # Generate the commit message into MY_MSG_FILE.
 #
 test -n "${MY_DEBUG}" && echo "MY_REVISIONS=${MY_REVISIONS}"

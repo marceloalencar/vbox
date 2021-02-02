@@ -1663,6 +1663,7 @@ int Console::i_configConstructorInner(PUVM pUVM, PVM pVM, AutoWriteLock *pAlock)
 #ifdef VBOX_WITH_VMSVGA
             case GraphicsControllerType_VMSVGA:
                 InsertConfigInteger(pHM, "LovelyMesaDrvWorkaround", 1); /* hits someone else logging backdoor. */
+                InsertConfigInteger(pNEM, "LovelyMesaDrvWorkaround", 1); /* hits someone else logging backdoor. */
                 RT_FALL_THROUGH();
             case GraphicsControllerType_VBoxSVGA:
 #endif
@@ -2629,6 +2630,17 @@ int Console::i_configConstructorInner(PUVM pUVM, PVM pVM, AutoWriteLock *pAlock)
             hrc = networkAdapter->COMGETTER(MACAddress)(macAddr.asOutParam());              H();
             Assert(!macAddr.isEmpty());
             Utf8Str macAddrUtf8 = macAddr;
+#ifdef VBOX_WITH_CLOUD_NET
+            NetworkAttachmentType_T eAttachmentType;
+            hrc = networkAdapter->COMGETTER(AttachmentType)(&eAttachmentType);                 H();
+            if (eAttachmentType == NetworkAttachmentType_Cloud)
+            {
+                mGateways.setLocalMacAddress(macAddrUtf8);
+                /* We'll insert cloud MAC later, when it becomes known. */
+            }
+            else
+            {
+#endif
             char *macStr = (char*)macAddrUtf8.c_str();
             Assert(strlen(macStr) == 12);
             RTMAC Mac;
@@ -2645,7 +2657,9 @@ int Console::i_configConstructorInner(PUVM pUVM, PVM pVM, AutoWriteLock *pAlock)
                 *pMac++ = (char)(((c1 & 0x0f) << 4) | (c2 & 0x0f));
             }
             InsertConfigBytes(pCfg, "MAC", &Mac, sizeof(Mac));
-
+#ifdef VBOX_WITH_CLOUD_NET
+            }
+#endif
             /*
              * Check if the cable is supposed to be unplugged
              */
@@ -3152,7 +3166,7 @@ int Console::i_configConstructorInner(PUVM pUVM, PVM pVM, AutoWriteLock *pAlock)
             {
                 rc = HGCMHostRegisterServiceExtension(&m_hHgcmSvcExtDragAndDrop, "VBoxDragAndDropSvc",
                                                       &GuestDnD::notifyDnDDispatcher,
-                                                      GUESTDNDINST());
+                                                      GuestDnDInst());
                 if (RT_FAILURE(rc))
                     Log(("Cannot register VBoxDragAndDropSvc extension, rc=%Rrc\n", rc));
                 else
@@ -4984,6 +4998,11 @@ int Console::i_configNetwork(const char *pszDevice,
         HRESULT hrc;
         Bstr bstr;
 
+#ifdef VBOX_WITH_CLOUD_NET
+        /* We'll need device's pCfg for cloud attachments */
+        PCFGMNODE pDevCfg = pCfg;
+#endif /* VBOX_WITH_CLOUD_NET */
+
 #define H()         AssertLogRelMsgReturn(!FAILED(hrc), ("hrc=%Rhrc\n", hrc), VERR_MAIN_CONFIG_CONSTRUCTOR_COM_ERROR)
 
         /*
@@ -5822,12 +5841,34 @@ int Console::i_configNetwork(const char *pszDevice,
 #ifdef VBOX_WITH_CLOUD_NET
             case NetworkAttachmentType_Cloud:
             {
-                hrc = aNetworkAdapter->COMGETTER(CloudNetwork)(bstr.asOutParam());       H();
+                static const char *s_pszCloudExtPackName = "Oracle VM VirtualBox Extension Pack";
+                /*
+                 * Cloud network attachments do not work wihout installed extpack.
+                 * Without extpack support they won't work either.
+                 */
+# ifdef VBOX_WITH_EXTPACK
+                if (!mptrExtPackManager->i_isExtPackUsable(s_pszCloudExtPackName))
+# endif
+                {
+                    return VMSetError(VMR3GetVM(mpUVM), VERR_NOT_FOUND, RT_SRC_POS,
+                            N_("Implementation of the cloud network attachment not found!\n"
+                                "To fix this problem, either install the '%s' or switch to "
+                                "another network attachment type in the VM settings.\n"
+                                ),
+                            s_pszCloudExtPackName);
+                }
+
+                ComPtr<ICloudNetwork> network;
+                hrc = aNetworkAdapter->COMGETTER(CloudNetwork)(bstr.asOutParam());            H();
+                hrc = pMachine->COMGETTER(Name)(mGateways.mTargetVM.asOutParam());            H();
+                hrc = virtualBox->FindCloudNetworkByName(bstr.raw(), network.asOutParam());   H();
+                hrc = startGateways(virtualBox, network, mGateways);                          H();
+                InsertConfigBytes(pDevCfg, "MAC", &mGateways.mCloudMacAddress, sizeof(mGateways.mCloudMacAddress));
                 if (!bstr.isEmpty())
                 {
                     InsertConfigString(pLunL0, "Driver", "IntNet");
                     InsertConfigNode(pLunL0, "Config", &pCfg);
-                    InsertConfigString(pCfg, "Network", BstrFmt("cloud-%ls", bstr));
+                    InsertConfigString(pCfg, "Network", BstrFmt("cloud-%ls", bstr.raw()));
                     InsertConfigInteger(pCfg, "TrunkType", kIntNetTrunkType_WhateverNone);
                     InsertConfigString(pCfg, "IfPolicyPromisc", pszPromiscuousGuestPolicy);
                     networkName = bstr;

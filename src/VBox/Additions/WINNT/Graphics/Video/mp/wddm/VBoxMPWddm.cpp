@@ -48,6 +48,7 @@ DWORD g_VBoxLogUm = VBOXWDDM_CFG_LOG_UM_BACKDOOR;
 #else
 DWORD g_VBoxLogUm = 0;
 #endif
+DWORD g_RefreshRate = 0;
 
 /* Whether the driver is display-only (no 3D) for Windows 8 or newer guests. */
 DWORD g_VBoxDisplayOnly = 0;
@@ -2328,7 +2329,7 @@ DxgkDdiDescribeAllocation(
     pDescribeAllocation->Height = pAllocation->AllocData.SurfDesc.height;
     pDescribeAllocation->Format = pAllocation->AllocData.SurfDesc.format;
     memset (&pDescribeAllocation->MultisampleMethod, 0, sizeof (pDescribeAllocation->MultisampleMethod));
-    pDescribeAllocation->RefreshRate.Numerator = 60000;
+    pDescribeAllocation->RefreshRate.Numerator = g_RefreshRate * 1000;
     pDescribeAllocation->RefreshRate.Denominator = 1000;
     pDescribeAllocation->PrivateDriverFormatAttribute = 0;
 
@@ -2685,7 +2686,8 @@ static void vboxWddmPointerAdjustDimensions(LONG iMaxX, LONG iMaxY, UINT XHot, U
     *pHeight = H;
 }
 
-BOOL vboxWddmPointerCopyColorData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape, PVIDEO_POINTER_ATTRIBUTES pPointerAttributes)
+BOOL vboxWddmPointerCopyColorData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape, PVIDEO_POINTER_ATTRIBUTES pPointerAttributes,
+                                  bool fDwordAlignScanlines)
 {
     ULONG srcMaskW, srcMaskH;
     ULONG dstBytesPerLine;
@@ -2713,6 +2715,8 @@ BOOL vboxWddmPointerCopyColorData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShap
     pSrc = (PBYTE)pSetPointerShape->pPixels;
     pDst = pPointerAttributes->Pixels;
     dstBytesPerLine = (pPointerAttributes->Width+7)/8;
+    if (fDwordAlignScanlines)
+        dstBytesPerLine = RT_ALIGN_T(dstBytesPerLine, 4, ULONG);
 
     /* sanity check */
     uint32_t cbData = RT_ALIGN_T(dstBytesPerLine*pPointerAttributes->Height, 4, ULONG)+
@@ -2752,7 +2756,8 @@ BOOL vboxWddmPointerCopyColorData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShap
     return TRUE;
 }
 
-BOOL vboxWddmPointerCopyMonoData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape, PVIDEO_POINTER_ATTRIBUTES pPointerAttributes)
+BOOL vboxWddmPointerCopyMonoData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape, PVIDEO_POINTER_ATTRIBUTES pPointerAttributes,
+                                 bool fDwordAlignScanlines)
 {
     ULONG srcMaskW, srcMaskH;
     ULONG dstBytesPerLine;
@@ -2790,6 +2795,8 @@ BOOL vboxWddmPointerCopyMonoData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape
     pSrc = (PBYTE)pSetPointerShape->pPixels;
     pDst = pPointerAttributes->Pixels;
     dstBytesPerLine = (pPointerAttributes->Width+7)/8;
+    if (fDwordAlignScanlines)
+        dstBytesPerLine = RT_ALIGN_T(dstBytesPerLine, 4, ULONG);
 
     for (y=0; y<pPointerAttributes->Height; ++y)
     {
@@ -2814,7 +2821,8 @@ BOOL vboxWddmPointerCopyMonoData(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape
     return TRUE;
 }
 
-static BOOLEAN vboxVddmPointerShapeToAttributes(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape, PVBOXWDDM_POINTER_INFO pPointerInfo)
+static BOOLEAN vboxVddmPointerShapeToAttributes(CONST DXGKARG_SETPOINTERSHAPE* pSetPointerShape, PVBOXWDDM_POINTER_INFO pPointerInfo,
+                                                bool fDwordAlignScanlines)
 {
     PVIDEO_POINTER_ATTRIBUTES pPointerAttributes = &pPointerInfo->Attributes.data;
     /* pPointerAttributes maintains the visibility state, clear all except visibility */
@@ -2823,7 +2831,7 @@ static BOOLEAN vboxVddmPointerShapeToAttributes(CONST DXGKARG_SETPOINTERSHAPE* p
     Assert(pSetPointerShape->Flags.Value == 1 || pSetPointerShape->Flags.Value == 2);
     if (pSetPointerShape->Flags.Color)
     {
-        if (vboxWddmPointerCopyColorData(pSetPointerShape, pPointerAttributes))
+        if (vboxWddmPointerCopyColorData(pSetPointerShape, pPointerAttributes, fDwordAlignScanlines))
         {
             pPointerAttributes->Flags = VIDEO_MODE_COLOR_POINTER;
             pPointerAttributes->Enable |= VBOX_MOUSE_POINTER_ALPHA;
@@ -2838,7 +2846,7 @@ static BOOLEAN vboxVddmPointerShapeToAttributes(CONST DXGKARG_SETPOINTERSHAPE* p
     }
     else if (pSetPointerShape->Flags.Monochrome)
     {
-        if (vboxWddmPointerCopyMonoData(pSetPointerShape, pPointerAttributes))
+        if (vboxWddmPointerCopyMonoData(pSetPointerShape, pPointerAttributes, fDwordAlignScanlines))
         {
             pPointerAttributes->Flags = VIDEO_MODE_MONO_POINTER;
         }
@@ -2887,7 +2895,8 @@ bool vboxWddmUpdatePointerShape(PVBOXMP_DEVEXT pDevExt, PVIDEO_POINTER_ATTRIBUTE
         if (fFlags & VBOX_MOUSE_POINTER_SHAPE)
         {
             /* Size of the pointer data: sizeof(AND mask) + sizeof(XOR mask) */
-            cbAndMask = ((((cWidth + 7) / 8) * cHeight + 3) & ~3);
+            /* "Each scanline is padded to a 32-bit boundary." */
+            cbAndMask = ((((cWidth + 7) / 8) + 3) & ~3) * cHeight;
             cbXorMask = cWidth * 4 * cHeight;
 
             /* Send the shape to the host. */
@@ -3028,9 +3037,10 @@ DxgkDdiSetPointerShape(
         /* mouse integration is ON */
         PVBOXMP_DEVEXT pDevExt = (PVBOXMP_DEVEXT)hAdapter;
         PVBOXWDDM_POINTER_INFO pPointerInfo = &pDevExt->aSources[pSetPointerShape->VidPnSourceId].PointerInfo;
+        bool const fDwordAlignScanlines = pDevExt->enmHwType != VBOXVIDEO_HWTYPE_VBOX;
         /** @todo to avoid extra data copy and extra heap allocation,
          *  need to maintain the pre-allocated HGSMI buffer and convert the data directly to it */
-        if (vboxVddmPointerShapeToAttributes(pSetPointerShape, pPointerInfo))
+        if (vboxVddmPointerShapeToAttributes(pSetPointerShape, pPointerInfo, fDwordAlignScanlines))
         {
             pDevExt->PointerInfo.iLastReportedScreen = pSetPointerShape->VidPnSourceId;
             if (vboxWddmUpdatePointerShape(pDevExt, &pPointerInfo->Attributes.data, VBOXWDDM_POINTER_ATTRIBUTES_SIZE))
@@ -3388,6 +3398,7 @@ DxgkDdiEscape(
                     return Status;
                 }
 
+                Status = STATUS_SUCCESS;
                 break;
             }
             case VBOXESC_TARGET_CONNECTIVITY:
@@ -3420,6 +3431,7 @@ DxgkDdiEscape(
                 pTarget->fDisabled = !RT_BOOL(pData->fu32Connect & 1);
                 pTarget->u8SyncState &= ~VBOXWDDM_HGSYNC_F_SYNCED_TOPOLOGY;
 
+                Status = STATUS_SUCCESS;
                 break;
             }
             case VBOXESC_DBGPRINT:
@@ -3466,6 +3478,7 @@ DxgkDdiEscape(
 
                     vboxWddmDisplaySettingsCheckPos(pDevExt, i);
                 }
+                Status = STATUS_SUCCESS;
                 break;
             }
             default:

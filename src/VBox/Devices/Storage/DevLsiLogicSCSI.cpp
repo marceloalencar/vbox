@@ -742,8 +742,10 @@ static void lsilogicFinishAddressReply(PPDMDEVINS pDevIns, PLSILOGICSCSI pThis, 
         PDMDevHlpCritSectLeave(pDevIns, &pThis->ReplyFreeQueueCritSect);
 
         /* Build 64bit physical address. */
-        RTGCPHYS GCPhysReplyMessage = LSILOGIC_RTGCPHYS_FROM_U32(pThis->u32HostMFAHighAddr, u32ReplyFrameAddressLow);
-        size_t cbReplyCopied = (pThis->cbReplyFrame < sizeof(MptReplyUnion)) ? pThis->cbReplyFrame : sizeof(MptReplyUnion);
+        RTGCPHYS const GCPhysReplyMessage = LSILOGIC_RTGCPHYS_FROM_U32(pThis->u32HostMFAHighAddr, u32ReplyFrameAddressLow);
+        uint32_t const cbReplyFrame = pThis->cbReplyFrame; /* Can be changed from EMT */
+        RT_UNTRUSTED_NONVOLATILE_COPY_FENCE();
+        size_t cbReplyCopied = RT_MIN(cbReplyFrame, sizeof(MptReplyUnion));
 
         /* Write reply to guest memory. */
         PDMDevHlpPCIPhysWrite(pDevIns, GCPhysReplyMessage, pReply, cbReplyCopied);
@@ -1117,33 +1119,33 @@ static int lsilogicR3ProcessMessageRequest(PPDMDEVINS pDevIns, PLSILOGICSCSI pTh
             pReply->IOCFacts.u8MaxDevices         = pThis->cMaxDevices;
             pReply->IOCFacts.u8MaxBuses           = pThis->cMaxBuses;
 
-            /* Check for a valid firmware image in the IOC memory which was downlaoded by tzhe guest earlier. */
-            PLSILOGICMEMREGN pRegion = lsilogicR3MemRegionFindByAddr(pThisCC, LSILOGIC_FWIMGHDR_LOAD_ADDRESS);
+            pReply->IOCFacts.u16ProductID         = 0xcafe; /* Our own product ID :) */
+            pReply->IOCFacts.u32FwImageSize       = 0; /* No image needed. */
+            pReply->IOCFacts.u32FWVersion         = 0;
 
+            /* Check for a valid firmware image in the IOC memory which was downloaded by the guest earlier and use that. */
+            PLSILOGICMEMREGN pRegion = lsilogicR3MemRegionFindByAddr(pThisCC, LSILOGIC_FWIMGHDR_LOAD_ADDRESS);
             if (pRegion)
             {
-                uint32_t offImgHdr = (LSILOGIC_FWIMGHDR_LOAD_ADDRESS - pRegion->u32AddrStart) / 4;
-                PFwImageHdr pFwImgHdr = (PFwImageHdr)&pRegion->au32Data[offImgHdr];
-
-                /* Check for the signature. */
-                /** @todo Checksum validation. */
-                if (   pFwImgHdr->u32Signature1 == LSILOGIC_FWIMGHDR_SIGNATURE1
-                    && pFwImgHdr->u32Signature2 == LSILOGIC_FWIMGHDR_SIGNATURE2
-                    && pFwImgHdr->u32Signature3 == LSILOGIC_FWIMGHDR_SIGNATURE3)
+                uint32_t offImgHdr = (LSILOGIC_FWIMGHDR_LOAD_ADDRESS - pRegion->u32AddrStart);
+                if (pRegion->u32AddrEnd - offImgHdr + 1 >= sizeof(FwImageHdr)) /* End address is inclusive. */
                 {
-                    LogFlowFunc(("IOC Facts: Found valid firmware image header in memory, using version (%#x), size (%d) and product ID (%#x) from there\n",
-                                 pFwImgHdr->u32FwVersion, pFwImgHdr->u32ImageSize, pFwImgHdr->u16ProductId));
+                    PFwImageHdr pFwImgHdr = (PFwImageHdr)&pRegion->au32Data[offImgHdr / 4];
 
-                    pReply->IOCFacts.u16ProductID         = pFwImgHdr->u16ProductId;
-                    pReply->IOCFacts.u32FwImageSize       = pFwImgHdr->u32ImageSize;
-                    pReply->IOCFacts.u32FWVersion         = pFwImgHdr->u32FwVersion;
+                    /* Check for the signature. */
+                    /** @todo Checksum validation. */
+                    if (   pFwImgHdr->u32Signature1 == LSILOGIC_FWIMGHDR_SIGNATURE1
+                        && pFwImgHdr->u32Signature2 == LSILOGIC_FWIMGHDR_SIGNATURE2
+                        && pFwImgHdr->u32Signature3 == LSILOGIC_FWIMGHDR_SIGNATURE3)
+                    {
+                        LogFlowFunc(("IOC Facts: Found valid firmware image header in memory, using version (%#x), size (%d) and product ID (%#x) from there\n",
+                                     pFwImgHdr->u32FwVersion, pFwImgHdr->u32ImageSize, pFwImgHdr->u16ProductId));
+
+                        pReply->IOCFacts.u16ProductID         = pFwImgHdr->u16ProductId;
+                        pReply->IOCFacts.u32FwImageSize       = pFwImgHdr->u32ImageSize;
+                        pReply->IOCFacts.u32FWVersion         = pFwImgHdr->u32FwVersion;
+                    }
                 }
-            }
-            else
-            {
-                pReply->IOCFacts.u16ProductID         = 0xcafe; /* Our own product ID :) */
-                pReply->IOCFacts.u32FwImageSize       = 0; /* No image needed. */
-                pReply->IOCFacts.u32FWVersion         = 0;
             }
             break;
         }
@@ -1375,8 +1377,12 @@ static VBOXSTRICTRC lsilogicRegisterWrite(PPDMDEVINS pDevIns, PLSILOGICSCSI pThi
                     {
                         pThis->cMessage = LSILOGIC_REG_DOORBELL_GET_SIZE(u32);
                         pThis->iMessage = 0;
-                        AssertMsg(pThis->cMessage <= RT_ELEMENTS(pThis->aMessage),
-                                  ("Message doesn't fit into the buffer, cMessage=%u", pThis->cMessage));
+
+                        /* This is not supposed to happen and the result is undefined, just stay in the current state. */
+                        AssertMsgReturn(pThis->cMessage <= RT_ELEMENTS(pThis->aMessage),
+                                        ("Message doesn't fit into the buffer, cMessage=%u", pThis->cMessage),
+                                        VINF_SUCCESS);
+
                         pThis->enmDoorbellState = LSILOGICDOORBELLSTATE_FN_HANDSHAKE;
                         /* Update the interrupt status to notify the guest that a doorbell function was started. */
                         lsilogicSetInterrupt(pDevIns, pThis, LSILOGIC_REG_HOST_INTR_STATUS_SYSTEM_DOORBELL);
@@ -1391,15 +1397,19 @@ static VBOXSTRICTRC lsilogicRegisterWrite(PPDMDEVINS pDevIns, PLSILOGICSCSI pThi
                     }
                     default:
                         AssertMsgFailed(("Unknown function %u to perform\n", uFunction));
+                        break;
                 }
             }
             else if (pThis->enmDoorbellState == LSILOGICDOORBELLSTATE_FN_HANDSHAKE)
             {
                 /*
                  * We are already performing a doorbell function.
-                 * Get the remaining parameters.
+                 * Get the remaining parameters, ignore any excess writes.
                  */
-                AssertMsg(pThis->iMessage < RT_ELEMENTS(pThis->aMessage), ("Message is too big to fit into the buffer\n"));
+                AssertMsgReturn(pThis->iMessage < pThis->cMessage,
+                                ("Guest is trying to write more than was indicated in the handshake\n"),
+                                VINF_SUCCESS);
+
                 /*
                  * If the last byte of the message is written, force a switch to R3 because some requests might force
                  * a reply through the FIFO which cannot be handled in GC or R0.
@@ -1977,7 +1987,7 @@ static size_t lsilogicSgBufWalker(PPDMDEVINS pDevIns, PLSILOGICREQ pLsiReq,
                 && SGEntry.Simple32.fEndOfBuffer)
                 return cbCopied - RT_MIN(cbSkip, cbCopied);
 
-            uint32_t cbCopyThis           = SGEntry.Simple32.u24Length;
+            size_t   cbCopyThis           = RT_MIN(SGEntry.Simple32.u24Length, cbCopy);
             RTGCPHYS GCPhysAddrDataBuffer = SGEntry.Simple32.u32DataBufferAddressLow;
 
             if (SGEntry.Simple32.f64BitAddress)
@@ -2147,11 +2157,12 @@ static void lsilogicR3ReqComplete(PPDMDEVINS pDevIns, PLSILOGICSCSI pThis, PLSIL
         GCPhysAddrSenseBuffer |= ((uint64_t)pThis->u32SenseBufferHighAddr << 32);
 
         /* Copy the sense buffer over. */
-        PDMDevHlpPCIPhysWrite(pDevIns, GCPhysAddrSenseBuffer, pReq->abSenseBuffer,
-                              RT_UNLIKELY(  pReq->GuestRequest.SCSIIO.u8SenseBufferLength
-                                          < sizeof(pReq->abSenseBuffer))
-                              ? pReq->GuestRequest.SCSIIO.u8SenseBufferLength
-                              : sizeof(pReq->abSenseBuffer));
+        if (pReq->GuestRequest.SCSIIO.u8SenseBufferLength > 0)
+            PDMDevHlpPCIPhysWrite(pDevIns, GCPhysAddrSenseBuffer, pReq->abSenseBuffer,
+                                  RT_UNLIKELY(  pReq->GuestRequest.SCSIIO.u8SenseBufferLength
+                                              < sizeof(pReq->abSenseBuffer))
+                                  ? pReq->GuestRequest.SCSIIO.u8SenseBufferLength
+                                  : sizeof(pReq->abSenseBuffer));
 
         if (RT_SUCCESS(rcReq) && RT_LIKELY(pReq->u8ScsiSts == SCSI_STATUS_OK))
         {
@@ -2318,6 +2329,8 @@ static int lsilogicR3ProcessSCSIIORequest(PPDMDEVINS pDevIns, PLSILOGICSCSI pThi
     IOCReply.SCSIIOError.u8Function          = pGuestReq->SCSIIO.u8Function;
     IOCReply.SCSIIOError.u8CDBLength         = pGuestReq->SCSIIO.u8CDBLength;
     IOCReply.SCSIIOError.u8SenseBufferLength = pGuestReq->SCSIIO.u8SenseBufferLength;
+    IOCReply.SCSIIOError.u8Reserved          = 0;
+    IOCReply.SCSIIOError.u8MessageFlags      = 0;
     IOCReply.SCSIIOError.u32MessageContext   = pGuestReq->SCSIIO.u32MessageContext;
     IOCReply.SCSIIOError.u8SCSIStatus        = SCSI_STATUS_OK;
     IOCReply.SCSIIOError.u8SCSIState         = MPT_SCSI_IO_ERROR_SCSI_STATE_TERMINATED;
@@ -5284,11 +5297,7 @@ static DECLCALLBACK(int) lsilogicR3Construct(PPDMDEVINS pDevIns, int iInstance, 
 
     /*
      * Create critical sections protecting the reply post and free queues.
-     * Note! We do our own syncronization, so NOP the default crit sect for the device.
      */
-    rc = PDMDevHlpSetDeviceCritSect(pDevIns, PDMDevHlpCritSectGetNop(pDevIns));
-    AssertRCReturn(rc, rc);
-
     rc = PDMDevHlpCritSectInit(pDevIns, &pThis->ReplyFreeQueueCritSect, RT_SRC_POS, "%sRFQ", szDevTag);
     if (RT_FAILURE(rc))
         return PDMDEV_SET_ERROR(pDevIns, rc, N_("LsiLogic: cannot create critical section for reply free queue"));
@@ -5546,12 +5555,8 @@ static DECLCALLBACK(int) lsilogicRZConstruct(PPDMDEVINS pDevIns)
     PDMDEV_CHECK_VERSIONS_RETURN(pDevIns);
     PLSILOGICSCSI pThis = PDMDEVINS_2_DATA(pDevIns, PLSILOGICSCSI);
 
-    /* Replicate the critsect configuration: */
-    int rc = PDMDevHlpSetDeviceCritSect(pDevIns, PDMDevHlpCritSectGetNop(pDevIns));
-    AssertRCReturn(rc, rc);
-
     /* Setup callbacks for this context: */
-    rc = PDMDevHlpIoPortSetUpContext(pDevIns, pThis->hIoPortsReg, lsilogicIOPortWrite, lsilogicIOPortRead, NULL /*pvUser*/);
+    int rc = PDMDevHlpIoPortSetUpContext(pDevIns, pThis->hIoPortsReg, lsilogicIOPortWrite, lsilogicIOPortRead, NULL /*pvUser*/);
     AssertRCReturn(rc, rc);
 
     rc = PDMDevHlpMmioSetUpContext(pDevIns, pThis->hMmioReg, lsilogicMMIOWrite, lsilogicMMIORead, NULL /*pvUser*/);

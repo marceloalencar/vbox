@@ -27,20 +27,22 @@
 #include "VBox/GuestHost/DragAndDrop.h"
 #include "VBox/HostServices/DragAndDropSvc.h"
 
+#include <iprt/path.h>
 #include <iprt/utf16.h>
+#include <iprt/uri.h>
 #include <VBox/log.h>
 
 
 
 VBoxDnDDropTarget::VBoxDnDDropTarget(VBoxDnDWnd *pParent)
-    : mRefCount(1),
-      mpWndParent(pParent),
-      mdwCurEffect(0),
-      mpvData(NULL),
-      mcbData(0),
-      hEventDrop(NIL_RTSEMEVENT)
+    : m_cRefs(1),
+      m_pWndParent(pParent),
+      m_dwCurEffect(0),
+      m_pvData(NULL),
+      m_cbData(0),
+      m_EvtDrop(NIL_RTSEMEVENT)
 {
-    int rc = RTSemEventCreate(&hEventDrop);
+    int rc = RTSemEventCreate(&m_EvtDrop);
     LogFlowFunc(("rc=%Rrc\n", rc)); NOREF(rc);
 }
 
@@ -48,10 +50,10 @@ VBoxDnDDropTarget::~VBoxDnDDropTarget(void)
 {
     reset();
 
-    int rc2 = RTSemEventDestroy(hEventDrop);
+    int rc2 = RTSemEventDestroy(m_EvtDrop);
     AssertRC(rc2);
 
-    LogFlowFunc(("rc=%Rrc, mRefCount=%RI32\n", rc2, mRefCount));
+    LogFlowFunc(("rc=%Rrc, mRefCount=%RI32\n", rc2, m_cRefs));
 }
 
 /*
@@ -60,12 +62,12 @@ VBoxDnDDropTarget::~VBoxDnDDropTarget(void)
 
 STDMETHODIMP_(ULONG) VBoxDnDDropTarget::AddRef(void)
 {
-    return InterlockedIncrement(&mRefCount);
+    return InterlockedIncrement(&m_cRefs);
 }
 
 STDMETHODIMP_(ULONG) VBoxDnDDropTarget::Release(void)
 {
-    LONG lCount = InterlockedDecrement(&mRefCount);
+    LONG lCount = InterlockedDecrement(&m_cRefs);
     if (lCount == 0)
     {
         delete this;
@@ -91,6 +93,11 @@ STDMETHODIMP VBoxDnDDropTarget::QueryInterface(REFIID iid, void **ppvObject)
     return E_NOINTERFACE;
 }
 
+/**
+ * Static helper function to dump supported formats of a data object.
+ *
+ * @param   pDataObject         Pointer to data object to dump formats for.
+ */
 /* static */
 void VBoxDnDDropTarget::DumpFormats(IDataObject *pDataObject)
 {
@@ -150,7 +157,7 @@ STDMETHODIMP VBoxDnDDropTarget::DragEnter(IDataObject *pDataObject, DWORD grfKey
     HRESULT hr = pDataObject->QueryGetData(&fmtEtc);
     if (hr == S_OK)
     {
-        mstrFormats = "text/uri-list";
+        m_strFormat = "text/uri-list";
     }
     else
     {
@@ -162,7 +169,7 @@ STDMETHODIMP VBoxDnDDropTarget::DragEnter(IDataObject *pDataObject, DWORD grfKey
         hr = pDataObject->QueryGetData(&fmtEtc);
         if (hr == S_OK)
         {
-            mstrFormats = "text/plain;charset=utf-8";
+            m_strFormat = "text/plain;charset=utf-8";
         }
         else
         {
@@ -172,7 +179,7 @@ STDMETHODIMP VBoxDnDDropTarget::DragEnter(IDataObject *pDataObject, DWORD grfKey
             hr = pDataObject->QueryGetData(&fmtEtc);
             if (hr == S_OK)
             {
-                mstrFormats = "text/plain;charset=utf-8";
+                m_strFormat = "text/plain;charset=utf-8";
             }
             else
             {
@@ -194,7 +201,7 @@ STDMETHODIMP VBoxDnDDropTarget::DragEnter(IDataObject *pDataObject, DWORD grfKey
         /* Make a copy of the FORMATETC structure so that we later can
          * use this for comparrison and stuff. */
         /** @todo The DVTARGETDEVICE member only is a shallow copy for now! */
-        memcpy(&mFormatEtc, &fmtEtc, sizeof(FORMATETC));
+        memcpy(&m_FormatEtc, &fmtEtc, sizeof(FORMATETC));
 
         /* Which drop effect we're going to use? */
         /* Note: pt is not used since we don't need to differentiate within our
@@ -221,7 +228,7 @@ STDMETHODIMP VBoxDnDDropTarget::DragEnter(IDataObject *pDataObject, DWORD grfKey
     }
 
     LogFlowFunc(("Returning mstrFormats=%s, cfFormat=%RI16, pdwEffect=%ld, hr=%Rhrc\n",
-                 mstrFormats.c_str(), fmtEtc.cfFormat, *pdwEffect, hr));
+                 m_strFormat.c_str(), fmtEtc.cfFormat, *pdwEffect, hr));
     return hr;
 }
 
@@ -232,10 +239,10 @@ STDMETHODIMP VBoxDnDDropTarget::DragOver(DWORD grfKeyState, POINTL pt, DWORD *pd
 
 #ifdef DEBUG_andy
     LogFlowFunc(("cfFormat=%RI16, grfKeyState=0x%x, x=%ld, y=%ld\n",
-                 mFormatEtc.cfFormat, grfKeyState, pt.x, pt.y));
+                 m_FormatEtc.cfFormat, grfKeyState, pt.x, pt.y));
 #endif
 
-    if (mFormatEtc.cfFormat)
+    if (m_FormatEtc.cfFormat)
     {
         /* Note: pt is not used since we don't need to differentiate within our
          *       proxy window. */
@@ -255,11 +262,11 @@ STDMETHODIMP VBoxDnDDropTarget::DragOver(DWORD grfKeyState, POINTL pt, DWORD *pd
 STDMETHODIMP VBoxDnDDropTarget::DragLeave(void)
 {
 #ifdef DEBUG_andy
-    LogFlowFunc(("cfFormat=%RI16\n", mFormatEtc.cfFormat));
+    LogFlowFunc(("cfFormat=%RI16\n", m_FormatEtc.cfFormat));
 #endif
 
-    if (mpWndParent)
-        mpWndParent->Hide();
+    if (m_pWndParent)
+        m_pWndParent->Hide();
 
     return S_OK;
 }
@@ -271,18 +278,18 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
     AssertPtrReturn(pdwEffect,   E_INVALIDARG);
 
     LogFlowFunc(("mFormatEtc.cfFormat=%RI16 (%s), pDataObject=0x%p, grfKeyState=0x%x, x=%ld, y=%ld\n",
-                 mFormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(mFormatEtc.cfFormat),
+                 m_FormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(m_FormatEtc.cfFormat),
                  pDataObject, grfKeyState, pt.x, pt.y));
 
     HRESULT hr = S_OK;
 
-    if (mFormatEtc.cfFormat) /* Did we get a supported format yet? */
+    if (m_FormatEtc.cfFormat) /* Did we get a supported format yet? */
     {
         /* Make sure the data object's data format is still valid. */
-        hr = pDataObject->QueryGetData(&mFormatEtc);
+        hr = pDataObject->QueryGetData(&m_FormatEtc);
         AssertMsg(SUCCEEDED(hr),
                   ("Data format changed to invalid between DragEnter() and Drop(), cfFormat=%RI16 (%s), hr=%Rhrc\n",
-                  mFormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(mFormatEtc.cfFormat), hr));
+                  m_FormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(m_FormatEtc.cfFormat), hr));
     }
 
     int rc = VINF_SUCCESS;
@@ -290,7 +297,7 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
     if (SUCCEEDED(hr))
     {
         STGMEDIUM stgMed;
-        hr = pDataObject->GetData(&mFormatEtc, &stgMed);
+        hr = pDataObject->GetData(&m_FormatEtc, &stgMed);
         if (SUCCEEDED(hr))
         {
             /*
@@ -299,7 +306,7 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
              */
             PVOID pvData = NULL; /** @todo Put this in an own union? */
 
-            switch (mFormatEtc.tymed)
+            switch (m_FormatEtc.tymed)
             {
                 case TYMED_HGLOBAL:
                     pvData = GlobalLock(stgMed.hGlobal);
@@ -314,7 +321,7 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
 
                 default:
                     AssertMsgFailed(("Storage medium type %RI32 supported\n",
-                                     mFormatEtc.tymed));
+                                     m_FormatEtc.tymed));
                     rc = VERR_NOT_SUPPORTED;
                     hr = DV_E_TYMED; /* Set special hr for OLE. */
                     break;
@@ -326,7 +333,7 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
                  * Second stage: Do the actual copying of the data object's data,
                  *               based on the storage medium type.
                  */
-                switch (mFormatEtc.cfFormat)
+                switch (m_FormatEtc.cfFormat)
                 {
                     case CF_TEXT:
                         RT_FALL_THROUGH();
@@ -336,13 +343,13 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
                         size_t cbSize = GlobalSize(pvData);
 
                         LogRel(("DnD: Got %zu bytes of %s\n", cbSize,
-                                                                mFormatEtc.cfFormat == CF_TEXT
+                                                                m_FormatEtc.cfFormat == CF_TEXT
                                                               ? "ANSI text" : "Unicode text"));
                         if (cbSize)
                         {
                             char *pszText = NULL;
 
-                            rc = mFormatEtc.cfFormat == CF_TEXT
+                            rc = m_FormatEtc.cfFormat == CF_TEXT
                                /* ANSI codepage -> UTF-8 */
                                ? RTStrCurrentCPToUtf8(&pszText, (char *)pvData)
                                /* Unicode  -> UTF-8 */
@@ -354,8 +361,8 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
 
                                 size_t cbText = strlen(pszText) + 1; /* Include termination. */
 
-                                mpvData = RTMemDup((void *)pszText, cbText);
-                                mcbData = cbText;
+                                m_pvData = RTMemDup((void *)pszText, cbText);
+                                m_cbData = cbText;
 
                                 RTStrFree(pszText);
                                 pszText = NULL;
@@ -387,8 +394,8 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
 
                         /* First, get the file count. */
                         /** @todo Does this work on Windows 2000 / NT4? */
-                        char *pszFiles = NULL;
-                        uint32_t cchFiles = 0;
+                        char  *pszFiles = NULL;
+                        size_t cchFiles = 0;
                         UINT cFiles = DragQueryFile(hDrop, UINT32_MAX /* iFile */, NULL /* lpszFile */, 0 /* cchFile */);
 
                         LogRel(("DnD: Got %RU16 file(s), fUnicode=%RTbool\n", cFiles, fUnicode));
@@ -450,66 +457,65 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
 
                                 LogRel(("DnD: Adding guest file '%s'\n", pszFileUtf8));
 
-                                rc = RTStrAAppendExN(&pszFiles, 1 /* cPairs */, pszFileUtf8, cchFileUtf8);
                                 if (RT_SUCCESS(rc))
-                                    cchFiles += cchFileUtf8;
-                            }
-                            else
-                                LogRel(("DnD: Error handling file entry #%u, rc=%Rrc\n", i, rc));
+                                {
+                                    char *pszFileURI = RTUriFileCreate(pszFileUtf8);
+                                    if (pszFileURI)
+                                    {
+                                        const size_t cchFileURI = RTStrNLen(pszFileURI, RTPATH_MAX);
+                                        rc = RTStrAAppendExN(&pszFiles, 1 /* cPairs */, pszFileURI, cchFileURI);
+                                        if (RT_SUCCESS(rc))
+                                            cchFiles += cchFileURI;
 
-                            if (pszFileUtf8)
-                                RTStrFree(pszFileUtf8);
+                                        RTStrFree(pszFileURI);
+                                    }
+                                    else
+                                        rc = VERR_NO_MEMORY;
+                                }
+                            }
 
                             if (RT_FAILURE(rc))
-                                break;
+                                LogRel(("DnD: Error handling file entry #%u, rc=%Rrc\n", i, rc));
 
-                            /* Add separation between filenames.
-                             * Note: Also do this for the last element of the list. */
-                            rc = RTStrAAppendExN(&pszFiles, 1 /* cPairs */, "\r\n", 2 /* Bytes */);
+                            RTStrFree(pszFileUtf8);
+
                             if (RT_SUCCESS(rc))
-                                cchFiles += 2; /* Include \r\n */
+                            {
+                                /* Add separation between filenames.
+                                 * Note: Also do this for the last element of the list. */
+                                rc = RTStrAAppendExN(&pszFiles, 1 /* cPairs */, DND_PATH_SEPARATOR_STR, 2 /* Bytes */);
+                                if (RT_SUCCESS(rc))
+                                    cchFiles += 2; /* Include \r\n */
+                            }
                         }
 
                         if (RT_SUCCESS(rc))
                         {
                             cchFiles += 1; /* Add string termination. */
-                            uint32_t cbFiles = cchFiles * sizeof(char);
 
-                            LogFlowFunc(("cFiles=%u, cchFiles=%RU32, cbFiles=%RU32, pszFiles=0x%p\n",
+                            const size_t cbFiles = cchFiles * sizeof(char);
+
+                            LogFlowFunc(("cFiles=%u, cchFiles=%zu, cbFiles=%zu, pszFiles=0x%p\n",
                                          cFiles, cchFiles, cbFiles, pszFiles));
 
-                            /* Translate the list into URI elements. */
-                            DnDURIList lstURI;
-                            rc = lstURI.AppendNativePathsFromList(pszFiles, cbFiles,
-                                                                  DNDURILIST_FLAGS_ABSOLUTE_PATHS);
-                            if (RT_SUCCESS(rc))
-                            {
-                                RTCString strRoot = lstURI.GetRootEntries();
-                                size_t cbRoot = strRoot.length() + 1; /* Include termination */
-
-                                mpvData = RTMemAlloc(cbRoot);
-                                if (mpvData)
-                                {
-                                    memcpy(mpvData, strRoot.c_str(), cbRoot);
-                                    mcbData = cbRoot;
-                                }
-                                else
-                                    rc = VERR_NO_MEMORY;
-                            }
+                            m_pvData = pszFiles;
+                            m_cbData = cbFiles;
+                        }
+                        else
+                        {
+                            RTStrFree(pszFiles);
+                            pszFiles = NULL;
                         }
 
-                        LogFlowFunc(("Building CF_HDROP list rc=%Rrc, pszFiles=0x%p, cFiles=%RU16, cchFiles=%RU32\n",
-                                     rc, pszFiles, cFiles, cchFiles));
-
-                        if (pszFiles)
-                            RTStrFree(pszFiles);
+                        LogFlowFunc(("Building CF_HDROP list rc=%Rrc, cFiles=%RU16, cchFiles=%RU32\n",
+                                     rc, cFiles, cchFiles));
                         break;
                     }
 
                     default:
                         /* Note: Should not happen due to the checks done in DragEnter(). */
                         AssertMsgFailed(("Format of type %RI16 (%s) not supported\n",
-                                         mFormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(mFormatEtc.cfFormat)));
+                                         m_FormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(m_FormatEtc.cfFormat)));
                         hr = DV_E_CLIPFORMAT; /* Set special hr for OLE. */
                         break;
                 }
@@ -517,7 +523,7 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
                 /*
                  * Third stage: Unlock + release access to the storage medium again.
                  */
-                switch (mFormatEtc.tymed)
+                switch (m_FormatEtc.tymed)
                 {
                     case TYMED_HGLOBAL:
                         GlobalUnlock(stgMed.hGlobal);
@@ -533,8 +539,8 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
             ReleaseStgMedium(&stgMed);
 
             /* Signal waiters. */
-            mDroppedRc = rc;
-            RTSemEventSignal(hEventDrop);
+            m_rcDropped = rc;
+            RTSemEventSignal(m_EvtDrop);
         }
     }
 
@@ -547,16 +553,23 @@ STDMETHODIMP VBoxDnDDropTarget::Drop(IDataObject *pDataObject, DWORD grfKeyState
     else
         *pdwEffect = DROPEFFECT_NONE;
 
-    if (mpWndParent)
-        mpWndParent->Hide();
+    if (m_pWndParent)
+        m_pWndParent->Hide();
 
     LogFlowFunc(("Returning with hr=%Rhrc (%Rrc), mFormatEtc.cfFormat=%RI16 (%s), *pdwEffect=%RI32\n",
-                 hr, rc, mFormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(mFormatEtc.cfFormat),
+                 hr, rc, m_FormatEtc.cfFormat, VBoxDnDDataObject::ClipboardFormatToString(m_FormatEtc.cfFormat),
                  *pdwEffect));
 
     return hr;
 }
 
+/**
+ * Static helper function to return a drop effect for a given key state and allowed effects.
+ *
+ * @returns Resolved drop effect.
+ * @param   grfKeyState         Key state to determine drop effect for.
+ * @param   dwAllowedEffects    Allowed drop effects to determine drop effect for.
+ */
 /* static */
 DWORD VBoxDnDDropTarget::GetDropEffect(DWORD grfKeyState, DWORD dwAllowedEffects)
 {
@@ -586,34 +599,48 @@ DWORD VBoxDnDDropTarget::GetDropEffect(DWORD grfKeyState, DWORD dwAllowedEffects
     return dwEffect;
 }
 
+/**
+ * Resets a drop target object.
+ */
 void VBoxDnDDropTarget::reset(void)
 {
     LogFlowFuncEnter();
 
-    if (mpvData)
+    if (m_pvData)
     {
-        RTMemFree(mpvData);
-        mpvData = NULL;
+        RTMemFree(m_pvData);
+        m_pvData = NULL;
     }
 
-    mcbData = 0;
+    m_cbData = 0;
 
-    RT_ZERO(mFormatEtc);
-    mstrFormats = "";
+    RT_ZERO(m_FormatEtc);
+    m_strFormat = "";
 }
 
+/**
+ * Returns the currently supported formats of a drop target.
+ *
+ * @returns Supported formats.
+ */
 RTCString VBoxDnDDropTarget::Formats(void) const
 {
-    return mstrFormats;
+    return m_strFormat;
 }
 
+/**
+ * Waits for a drop event to happen.
+ *
+ * @returns VBox status code.
+ * @param   msTimeout           Timeout (in ms) to wait for drop event.
+ */
 int VBoxDnDDropTarget::WaitForDrop(RTMSINTERVAL msTimeout)
 {
     LogFlowFunc(("msTimeout=%RU32\n", msTimeout));
 
-    int rc = RTSemEventWait(hEventDrop, msTimeout);
+    int rc = RTSemEventWait(m_EvtDrop, msTimeout);
     if (RT_SUCCESS(rc))
-        rc = mDroppedRc;
+        rc = m_rcDropped;
 
     LogFlowFuncLeaveRC(rc);
     return rc;

@@ -1695,9 +1695,9 @@ NATNetwork::NATNetwork() :
  * Constructor. Needs to set sane defaults which stand the test of time.
  */
 CloudNetwork::CloudNetwork() :
-    fEnabled(true),
     strProviderShortName("OCI"),
-    strProfileName("Default")
+    strProfileName("Default"),
+    fEnabled(true)
 {
 }
 #endif /* VBOX_WITH_CLOUD_NET */
@@ -4364,7 +4364,8 @@ void MachineConfigFile::readHardware(const xml::ElementNode &elmHardware,
         /* The new default is disabled, before it was enabled by default. */
         hw.audioAdapter.fEnabled = false;
     }
-    else if (m->sv >= SettingsVersion_v1_17)
+
+    if (m->sv >= SettingsVersion_v1_17)
     {
         /* Starting with VirtualBox 5.2 the default is disabled, before it was
          * enabled. This needs to matched by AudioAdapter::areDefaultSettings(). */

@@ -215,28 +215,47 @@ typedef RTLDRPEHASHSPECIALS *PRTLDRPEHASHSPECIALS;
 
 #ifndef IPRT_WITHOUT_LDR_VERIFY
 /**
- * Parsed signature data.
+ * Parsed data for one signature.
  */
-typedef struct RTLDRPESIGNATURE
+typedef struct RTLDRPESIGNATUREONE
 {
     /** The outer content info wrapper. */
-    RTCRPKCS7CONTENTINFO        ContentInfo;
+    PRTCRPKCS7CONTENTINFO       pContentInfo;
     /** Pointer to the decoded SignedData inside the ContentInfo member. */
     PRTCRPKCS7SIGNEDDATA        pSignedData;
     /** Pointer to the indirect data content. */
     PRTCRSPCINDIRECTDATACONTENT pIndData;
     /** The digest type employed by the signature. */
     RTDIGESTTYPE                enmDigest;
+    /** Set if we've already validate the image hash. */
+    bool                        fValidatedImageHash;
+    /** The signature number. */
+    uint16_t                    iSignature;
+    /** Hash result. */
+    RTLDRPEHASHRESUNION         HashRes;
+} RTLDRPESIGNATUREONE;
+/** Pointer to the parsed data of one signature. */
+typedef RTLDRPESIGNATUREONE *PRTLDRPESIGNATUREONE;
 
+/**
+ * Parsed signature data.
+ */
+typedef struct RTLDRPESIGNATURE
+{
     /** Pointer to the raw signatures.  This is allocated in the continuation of
      * this structure to keep things simple.  The size is given by  the security
      * export directory. */
     WIN_CERTIFICATE const      *pRawData;
-
+    /** The outer content info wrapper (primary signature). */
+    RTCRPKCS7CONTENTINFO        PrimaryContentInfo;
+    /** The info for the primary signature. */
+    RTLDRPESIGNATUREONE         Primary;
+    /** Number of nested signatures (zero if none). */
+    uint16_t                    cNested;
+    /** Pointer to an array of nested signatures (NULL if none). */
+    PRTLDRPESIGNATUREONE        paNested;
     /** Hash scratch data. */
     RTLDRPEHASHCTXUNION         HashCtx;
-    /** Hash result. */
-    RTLDRPEHASHRESUNION         HashRes;
 } RTLDRPESIGNATURE;
 /** Pointed to SigneData parsing stat and output. */
 typedef RTLDRPESIGNATURE *PRTLDRPESIGNATURE;
@@ -2522,8 +2541,121 @@ static int rtldrPE_VerifySignatureRead(PRTLDRMODPE pModPe, PRTLDRPESIGNATURE *pp
 static void rtldrPE_VerifySignatureDestroy(PRTLDRMODPE pModPe, PRTLDRPESIGNATURE pSignature)
 {
     RT_NOREF_PV(pModPe);
-    RTCrPkcs7ContentInfo_Delete(&pSignature->ContentInfo);
+    RTCrPkcs7ContentInfo_Delete(&pSignature->PrimaryContentInfo);
+    if (pSignature->paNested)
+    {
+        RTMemTmpFree(pSignature->paNested);
+        pSignature->paNested = NULL;
+    }
     RTMemTmpFree(pSignature);
+}
+
+
+/**
+ * Handles nested signatures.
+ *
+ * @returns IPRT status code.
+ * @param   pSignature          The signature status structure.  Returns with
+ *                              cNested = 0 and paNested = NULL if no nested
+ *                              signatures.
+ * @param   pErrInfo            Where to return extended error info (optional).
+ */
+static int rtldrPE_VerifySignatureDecodeNested(PRTLDRPESIGNATURE pSignature, PRTERRINFO pErrInfo)
+{
+    Assert(pSignature->cNested == 0);
+    Assert(pSignature->paNested == NULL);
+
+    /*
+     * Count nested signatures.
+     */
+    uint32_t cNested = 0;
+    for (uint32_t iSignerInfo = 0; iSignerInfo < pSignature->Primary.pSignedData->SignerInfos.cItems; iSignerInfo++)
+    {
+        PCRTCRPKCS7SIGNERINFO pSignerInfo = pSignature->Primary.pSignedData->SignerInfos.papItems[iSignerInfo];
+        for (uint32_t iAttrib = 0; iAttrib < pSignerInfo->UnauthenticatedAttributes.cItems; iAttrib++)
+        {
+            PCRTCRPKCS7ATTRIBUTE pAttrib = pSignerInfo->UnauthenticatedAttributes.papItems[iAttrib];
+            if (pAttrib->enmType == RTCRPKCS7ATTRIBUTETYPE_MS_NESTED_SIGNATURE)
+            {
+                Assert(pAttrib->uValues.pContentInfos);
+                cNested += pAttrib->uValues.pContentInfos->cItems;
+            }
+        }
+    }
+    if (!cNested)
+        return VINF_SUCCESS;
+
+    /*
+     * Allocate and populate the info structures.
+     */
+    pSignature->paNested = (PRTLDRPESIGNATUREONE)RTMemTmpAllocZ(sizeof(pSignature->paNested[0]) * cNested);
+    if (!pSignature->paNested)
+        return RTErrInfoSetF(pErrInfo, VERR_NO_TMP_MEMORY, "Failed to allocate space for %u nested signatures", cNested);
+    pSignature->cNested = cNested;
+
+    cNested = 0;
+    for (uint32_t iSignerInfo = 0; iSignerInfo < pSignature->Primary.pSignedData->SignerInfos.cItems; iSignerInfo++)
+    {
+        PCRTCRPKCS7SIGNERINFO pSignerInfo = pSignature->Primary.pSignedData->SignerInfos.papItems[iSignerInfo];
+        for (uint32_t iAttrib = 0; iAttrib < pSignerInfo->UnauthenticatedAttributes.cItems; iAttrib++)
+        {
+            PCRTCRPKCS7ATTRIBUTE pAttrib = pSignerInfo->UnauthenticatedAttributes.papItems[iAttrib];
+            if (pAttrib->enmType == RTCRPKCS7ATTRIBUTETYPE_MS_NESTED_SIGNATURE)
+            {
+                for (uint32_t iItem = 0; iItem < pAttrib->uValues.pContentInfos->cItems; iItem++, cNested++)
+                {
+                    PRTLDRPESIGNATUREONE  pInfo        = &pSignature->paNested[cNested];
+                    PRTCRPKCS7CONTENTINFO pContentInfo = pAttrib->uValues.pContentInfos->papItems[iItem];
+                    pInfo->pContentInfo = pContentInfo;
+                    pInfo->iSignature   = cNested;
+
+                    if (RTCrPkcs7ContentInfo_IsSignedData(pInfo->pContentInfo))
+                    { /* likely */ }
+                    else
+                        return RTErrInfoSetF(pErrInfo, VERR_LDRVI_EXPECTED_INDIRECT_DATA_CONTENT_OID, /** @todo error code*/
+                                             "Nested#%u: PKCS#7 is not 'signedData': %s", cNested, pInfo->pContentInfo->ContentType.szObjId);
+                    PRTCRPKCS7SIGNEDDATA pSignedData = pContentInfo->u.pSignedData;
+                    pInfo->pSignedData = pSignedData;
+
+                    /*
+                     * Check the authenticode bits.
+                     */
+                    if (!strcmp(pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID))
+                    { /* likely */ }
+                    else
+                        return RTErrInfoSetF(pErrInfo, VERR_LDRVI_EXPECTED_INDIRECT_DATA_CONTENT_OID,
+                                             "Nested#%u: Unknown pSignedData.ContentInfo.ContentType.szObjId value: %s (expected %s)",
+                                             cNested, pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID);
+                    pInfo->pIndData = pSignedData->ContentInfo.u.pIndirectDataContent;
+                    Assert(pInfo->pIndData);
+
+                    /*
+                     * Check that things add up.
+                     */
+                    int rc = RTCrPkcs7SignedData_CheckSanity(pSignedData,
+                                                             RTCRPKCS7SIGNEDDATA_SANITY_F_AUTHENTICODE
+                                                             | RTCRPKCS7SIGNEDDATA_SANITY_F_ONLY_KNOWN_HASH
+                                                             | RTCRPKCS7SIGNEDDATA_SANITY_F_SIGNING_CERT_PRESENT,
+                                                             pErrInfo, "SD");
+                    if (RT_SUCCESS(rc))
+                        rc = RTCrSpcIndirectDataContent_CheckSanityEx(pInfo->pIndData,
+                                                                      pSignedData,
+                                                                      RTCRSPCINDIRECTDATACONTENT_SANITY_F_ONLY_KNOWN_HASH,
+                                                                      pErrInfo);
+                    if (RT_SUCCESS(rc))
+                    {
+                        PCRTCRX509ALGORITHMIDENTIFIER pDigestAlgorithm = &pInfo->pIndData->DigestInfo.DigestAlgorithm;
+                        pInfo->enmDigest = RTCrX509AlgorithmIdentifier_QueryDigestType(pDigestAlgorithm);
+                        AssertReturn(pInfo->enmDigest != RTDIGESTTYPE_INVALID, VERR_INTERNAL_ERROR_4); /* Checked above! */
+                    }
+                    else
+                        return rc;
+                }
+            }
+        }
+    }
+
+    return VINF_SUCCESS;
 }
 
 
@@ -2551,57 +2683,64 @@ static int rtldrPE_VerifySignatureDecode(PRTLDRMODPE pModPe, PRTLDRPESIGNATURE p
                             0,
                             "WinCert");
 
-    int rc = RTCrPkcs7ContentInfo_DecodeAsn1(&PrimaryCursor.Cursor, 0, &pSignature->ContentInfo, "CI");
+    PRTLDRPESIGNATUREONE pInfo = &pSignature->Primary;
+    pInfo->pContentInfo = &pSignature->PrimaryContentInfo;
+    int rc = RTCrPkcs7ContentInfo_DecodeAsn1(&PrimaryCursor.Cursor, 0, pInfo->pContentInfo, "CI");
     if (RT_SUCCESS(rc))
     {
-        if (RTCrPkcs7ContentInfo_IsSignedData(&pSignature->ContentInfo))
+        if (RTCrPkcs7ContentInfo_IsSignedData(pInfo->pContentInfo))
         {
-            pSignature->pSignedData = pSignature->ContentInfo.u.pSignedData;
+            pInfo->pSignedData = pInfo->pContentInfo->u.pSignedData;
 
             /*
              * Decode the authenticode bits.
              */
-            if (!strcmp(pSignature->pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID))
+            if (!strcmp(pInfo->pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID))
             {
-                pSignature->pIndData = pSignature->pSignedData->ContentInfo.u.pIndirectDataContent;
-                Assert(pSignature->pIndData);
+                pInfo->pIndData = pInfo->pSignedData->ContentInfo.u.pIndirectDataContent;
+                Assert(pInfo->pIndData);
 
                 /*
                  * Check that things add up.
                  */
+                rc = RTCrPkcs7SignedData_CheckSanity(pInfo->pSignedData,
+                                                     RTCRPKCS7SIGNEDDATA_SANITY_F_AUTHENTICODE
+                                                     | RTCRPKCS7SIGNEDDATA_SANITY_F_ONLY_KNOWN_HASH
+                                                     | RTCRPKCS7SIGNEDDATA_SANITY_F_SIGNING_CERT_PRESENT,
+                                                     pErrInfo, "SD");
                 if (RT_SUCCESS(rc))
-                    rc = RTCrPkcs7SignedData_CheckSanity(pSignature->pSignedData,
-                                                         RTCRPKCS7SIGNEDDATA_SANITY_F_AUTHENTICODE
-                                                         | RTCRPKCS7SIGNEDDATA_SANITY_F_ONLY_KNOWN_HASH
-                                                         | RTCRPKCS7SIGNEDDATA_SANITY_F_SIGNING_CERT_PRESENT,
-                                                         pErrInfo, "SD");
-                if (RT_SUCCESS(rc))
-                    rc = RTCrSpcIndirectDataContent_CheckSanityEx(pSignature->pIndData,
-                                                                  pSignature->pSignedData,
+                    rc = RTCrSpcIndirectDataContent_CheckSanityEx(pInfo->pIndData,
+                                                                  pInfo->pSignedData,
                                                                   RTCRSPCINDIRECTDATACONTENT_SANITY_F_ONLY_KNOWN_HASH,
                                                                   pErrInfo);
                 if (RT_SUCCESS(rc))
                 {
-                    PCRTCRX509ALGORITHMIDENTIFIER pDigestAlgorithm = &pSignature->pIndData->DigestInfo.DigestAlgorithm;
-                    pSignature->enmDigest = RTCrX509AlgorithmIdentifier_QueryDigestType(pDigestAlgorithm);
-                    AssertReturn(pSignature->enmDigest != RTDIGESTTYPE_INVALID, VERR_INTERNAL_ERROR_4); /* Checked above! */
+                    PCRTCRX509ALGORITHMIDENTIFIER pDigestAlgorithm = &pInfo->pIndData->DigestInfo.DigestAlgorithm;
+                    pInfo->enmDigest = RTCrX509AlgorithmIdentifier_QueryDigestType(pDigestAlgorithm);
+                    AssertReturn(pInfo->enmDigest != RTDIGESTTYPE_INVALID, VERR_INTERNAL_ERROR_4); /* Checked above! */
+
+                    /*
+                     * Deal with nested signatures.
+                     */
+                    rc = rtldrPE_VerifySignatureDecodeNested(pSignature, pErrInfo);
                 }
             }
             else
                 rc = RTErrInfoSetF(pErrInfo, VERR_LDRVI_EXPECTED_INDIRECT_DATA_CONTENT_OID,
                                    "Unknown pSignedData.ContentInfo.ContentType.szObjId value: %s (expected %s)",
-                                   pSignature->pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID);
+                                   pInfo->pSignedData->ContentInfo.ContentType.szObjId, RTCRSPCINDIRECTDATACONTENT_OID);
         }
         else
             rc = RTErrInfoSetF(pErrInfo, VERR_LDRVI_EXPECTED_INDIRECT_DATA_CONTENT_OID, /** @todo error code*/
-                               "PKCS#7 is not 'signedData': %s", pSignature->ContentInfo.ContentType.szObjId);
+                               "PKCS#7 is not 'signedData': %s", pInfo->pContentInfo->ContentType.szObjId);
     }
     return rc;
 }
 
 
+
 static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOBJECTATTRIBUTE pAttrib, RTDIGESTTYPE enmDigest,
-                                       void *pvScratch, size_t cbScratch, PRTERRINFO pErrInfo)
+                                       void *pvScratch, size_t cbScratch, uint32_t iSignature, PRTERRINFO pErrInfo)
 {
     AssertReturn(cbScratch >= _4K, VERR_INTERNAL_ERROR_3);
 
@@ -2617,8 +2756,8 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
     uint32_t const cPages = pAttrib->u.pPageHashes->RawData.Asn1Core.cb / (cbHash + 4);
     if (cPages * (cbHash + 4) != pAttrib->u.pPageHashes->RawData.Asn1Core.cb)
         return RTErrInfoSetF(pErrInfo, VERR_LDRVI_PAGE_HASH_TAB_SIZE_OVERFLOW,
-                             "Page hashes size issue: cb=%#x cbHash=%#x",
-                             pAttrib->u.pPageHashes->RawData.Asn1Core.cb, cbHash);
+                             "Signature #%u - Page hashes size issue in: cb=%#x cbHash=%#x",
+                             iSignature, pAttrib->u.pPageHashes->RawData.Asn1Core.cb, cbHash);
 
     /*
      * Walk the table.
@@ -2639,12 +2778,12 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
         uint32_t const offPageInFile = RT_MAKE_U32_FROM_U8(pbHashTab[0], pbHashTab[1], pbHashTab[2], pbHashTab[3]);
         if (RT_UNLIKELY(offPageInFile >= SpecialPlaces.cbToHash))
             return RTErrInfoSetF(pErrInfo, VERR_LDRVI_PAGE_HASH_TAB_TOO_LONG,
-                                 "Page hash entry #%u is beyond the signature table start: %#x, %#x",
-                                 iPage, offPageInFile, SpecialPlaces.cbToHash);
+                                 "Signature #%u - Page hash entry #%u is beyond the signature table start: %#x, %#x",
+                                 iSignature, iPage, offPageInFile, SpecialPlaces.cbToHash);
         if (RT_UNLIKELY(offPageInFile < offPrev))
             return RTErrInfoSetF(pErrInfo, VERR_LDRVI_PAGE_HASH_TAB_NOT_STRICTLY_SORTED,
-                                 "Page hash table is not strictly sorted: entry #%u @%#x, previous @%#x\n",
-                                 iPage, offPageInFile, offPrev);
+                                 "Signature #%u - Page hash table is not strictly sorted: entry #%u @%#x, previous @%#x\n",
+                                 iSignature, iPage, offPageInFile, offPrev);
 
 #ifdef COMPLICATED_AND_WRONG
         /* Figure out how much to read and how much to zero.  Need keep track
@@ -2665,7 +2804,8 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
                     offSectEnd = pModPe->paSections[iSh].PointerToRawData + pModPe->paSections[iSh].SizeOfRawData;
                 else
                     return RTErrInfoSetF(pErrInfo, VERR_PAGE_HASH_TAB_HASHES_NON_SECTION_DATA,
-                                         "Page hash entry #%u isn't in any section: %#x", iPage, offPageInFile);
+                                         "Signature #%u - Page hash entry #%u isn't in any section: %#x",
+                                         iSignature, iPage, offPageInFile);
             }
         }
 
@@ -2709,8 +2849,8 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
             rc = pModPe->Core.pReader->pfnRead(pModPe->Core.pReader, pbCur, cbScratchRead, offScratchRead);
             if (RT_FAILURE(rc))
                 return RTErrInfoSetF(pErrInfo, VERR_LDRVI_READ_ERROR_HASH,
-                                     "Page hash read error at %#x: %Rrc (cbScratchRead=%#zx)",
-                                     offScratchRead, rc, cbScratchRead);
+                                     "Signature #%u - Page hash read error at %#x: %Rrc (cbScratchRead=%#zx)",
+                                     iSignature, offScratchRead, rc, cbScratchRead);
         }
 
         /*
@@ -2777,8 +2917,9 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
         pbHashTab += 4;
         if (memcmp(pbHashTab, &HashRes, cbHash) != 0)
             return RTErrInfoSetF(pErrInfo, VERR_LDRVI_PAGE_HASH_MISMATCH,
-                                 "Page hash failed for page #%u, @%#x, %#x bytes: %.*Rhxs != %.*Rhxs",
-                                 iPage, offPageInFile, cbPageInFile, (size_t)cbHash, pbHashTab, (size_t)cbHash, &HashRes);
+                                 "Signature #%u - Page hash failed for page #%u, @%#x, %#x bytes: %.*Rhxs != %.*Rhxs",
+                                 iSignature, iPage, offPageInFile, cbPageInFile, (size_t)cbHash, pbHashTab,
+                                 (size_t)cbHash, &HashRes);
         pbHashTab += cbHash;
         offPrev = offPageInFile;
     }
@@ -2788,10 +2929,114 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
      */
     if (!ASMMemIsZero(pbHashTab + 4, cbHash))
         return RTErrInfoSetF(pErrInfo, VERR_LDRVI_PAGE_HASH_TAB_TOO_LONG,
-                             "Maltform final page hash table entry: #%u %#010x %.*Rhxs",
-                             cPages - 1, RT_MAKE_U32_FROM_U8(pbHashTab[0], pbHashTab[1], pbHashTab[2], pbHashTab[3]),
+                             "Signature #%u - Malformed final page hash table entry: #%u %#010x %.*Rhxs",
+                             iSignature, cPages - 1, RT_MAKE_U32_FROM_U8(pbHashTab[0], pbHashTab[1], pbHashTab[2], pbHashTab[3]),
                              (size_t)cbHash, pbHashTab + 4);
     return VINF_SUCCESS;
+}
+
+
+static int rtldrPE_VerifySignatureValidateOnePageHashes(PRTLDRMODPE pModPe, PRTLDRPESIGNATUREONE pInfo,
+                                                        void *pvScratch, uint32_t cbScratch, PRTERRINFO pErrInfo)
+{
+    /*
+     * Compare the page hashes if present.
+     *
+     * Seems the difference between V1 and V2 page hash attributes is
+     * that v1 uses SHA-1 while v2 uses SHA-256. The data structures
+     * seems to be identical otherwise.  Initially we assumed the digest
+     * algorithm was supposed to be RTCRSPCINDIRECTDATACONTENT::DigestInfo,
+     * i.e. the same as for the whole image hash.  The initial approach
+     * worked just fine, but this makes more sense.
+     *
+     * (See also comments in osslsigncode.c (google it).)
+     */
+    PCRTCRSPCSERIALIZEDOBJECTATTRIBUTE pAttrib;
+    /* V2 - SHA-256: */
+    pAttrib = RTCrSpcIndirectDataContent_GetPeImageObjAttrib(pInfo->pIndData,
+                                                             RTCRSPCSERIALIZEDOBJECTATTRIBUTETYPE_PAGE_HASHES_V2);
+    if (pAttrib)
+        return rtldrPE_VerifyAllPageHashes(pModPe, pAttrib, RTDIGESTTYPE_SHA256, pvScratch, cbScratch,
+                                           pInfo->iSignature + 1, pErrInfo);
+
+    /* V1 - SHA-1: */
+    pAttrib = RTCrSpcIndirectDataContent_GetPeImageObjAttrib(pInfo->pIndData,
+                                                             RTCRSPCSERIALIZEDOBJECTATTRIBUTETYPE_PAGE_HASHES_V1);
+    if (pAttrib)
+        return rtldrPE_VerifyAllPageHashes(pModPe, pAttrib, RTDIGESTTYPE_SHA1, pvScratch, cbScratch,
+                                           pInfo->iSignature + 1, pErrInfo);
+
+    /* No page hashes: */
+    return VINF_SUCCESS;
+}
+
+
+static int rtldrPE_VerifySignatureValidateOneImageHash(PRTLDRMODPE pModPe, PRTLDRPESIGNATURE pSignature,
+                                                       PRTLDRPESIGNATUREONE pInfo, void *pvScratch, uint32_t cbScratch,
+                                                       PRTERRINFO pErrInfo)
+{
+    /*
+     * Assert sanity.
+     */
+    AssertReturn(pInfo->enmDigest > RTDIGESTTYPE_INVALID && pInfo->enmDigest < RTDIGESTTYPE_END, VERR_INTERNAL_ERROR_4);
+    AssertPtrReturn(pInfo->pIndData, VERR_INTERNAL_ERROR_5);
+    AssertReturn(RTASN1CORE_IS_PRESENT(&pInfo->pIndData->DigestInfo.Digest.Asn1Core), VERR_INTERNAL_ERROR_5);
+    AssertPtrReturn(pInfo->pIndData->DigestInfo.Digest.Asn1Core.uData.pv, VERR_INTERNAL_ERROR_5);
+
+    /*
+     * Skip it if we've already verified it.
+     */
+    if (pInfo->fValidatedImageHash)
+        return VINF_SUCCESS;
+
+    /*
+     * Calculate it.
+     */
+    uint32_t const cbHash = rtLdrPE_HashGetHashSize(pInfo->enmDigest);
+    AssertReturn(pInfo->pIndData->DigestInfo.Digest.Asn1Core.cb == cbHash, VERR_INTERNAL_ERROR_5);
+
+    int rc = rtldrPE_HashImageCommon(pModPe, pvScratch, cbScratch, pInfo->enmDigest,
+                                     &pSignature->HashCtx, &pInfo->HashRes, pErrInfo);
+    if (RT_SUCCESS(rc))
+    {
+        pInfo->fValidatedImageHash = true;
+        if (memcmp(&pInfo->HashRes, pInfo->pIndData->DigestInfo.Digest.Asn1Core.uData.pv, cbHash) == 0)
+        {
+            /*
+             * Verify other signatures with the same digest type.
+             */
+            RTLDRPEHASHRESUNION const * const pHashRes      = &pInfo->HashRes;
+            RTDIGESTTYPE const                enmDigestType = pInfo->enmDigest;
+            for (uint32_t i = 0; i < pSignature->cNested; i++)
+            {
+                pInfo = &pSignature->paNested[i]; /* Note! pInfo changes! */
+                if (   !pInfo->fValidatedImageHash
+                    && pInfo->enmDigest == enmDigestType
+                    /* paranoia from the top of this function: */
+                    && pInfo->pIndData
+                    && RTASN1CORE_IS_PRESENT(&pInfo->pIndData->DigestInfo.Digest.Asn1Core)
+                    && pInfo->pIndData->DigestInfo.Digest.Asn1Core.uData.pv
+                    && pInfo->pIndData->DigestInfo.Digest.Asn1Core.cb == cbHash)
+                {
+                    pInfo->fValidatedImageHash = true;
+                    if (memcmp(pHashRes, pInfo->pIndData->DigestInfo.Digest.Asn1Core.uData.pv, cbHash) != 0)
+                    {
+                        rc = RTErrInfoSetF(pErrInfo, VERR_LDRVI_IMAGE_HASH_MISMATCH,
+                                           "Full image signature #%u mismatch: %.*Rhxs, expected %.*Rhxs", pInfo->iSignature + 1,
+                                           cbHash, pHashRes,
+                                           cbHash, pInfo->pIndData->DigestInfo.Digest.Asn1Core.uData.pv);
+                        break;
+                    }
+                }
+            }
+        }
+        else
+            rc = RTErrInfoSetF(pErrInfo, VERR_LDRVI_IMAGE_HASH_MISMATCH,
+                               "Full image signature #%u mismatch: %.*Rhxs, expected %.*Rhxs", pInfo->iSignature + 1,
+                               cbHash, &pInfo->HashRes,
+                               cbHash, pInfo->pIndData->DigestInfo.Digest.Asn1Core.uData.pv);
+    }
+    return rc;
 }
 
 
@@ -2805,25 +3050,17 @@ static int rtldrPE_VerifyAllPageHashes(PRTLDRMODPE pModPe, PCRTCRSPCSERIALIZEDOB
  */
 static int rtldrPE_VerifySignatureValidateHash(PRTLDRMODPE pModPe, PRTLDRPESIGNATURE pSignature, PRTERRINFO pErrInfo)
 {
-    AssertReturn(pSignature->enmDigest > RTDIGESTTYPE_INVALID && pSignature->enmDigest < RTDIGESTTYPE_END, VERR_INTERNAL_ERROR_4);
-    AssertPtrReturn(pSignature->pIndData, VERR_INTERNAL_ERROR_5);
-    AssertReturn(RTASN1CORE_IS_PRESENT(&pSignature->pIndData->DigestInfo.Digest.Asn1Core), VERR_INTERNAL_ERROR_5);
-    AssertPtrReturn(pSignature->pIndData->DigestInfo.Digest.Asn1Core.uData.pv, VERR_INTERNAL_ERROR_5);
-
-    uint32_t const cbHash = rtLdrPE_HashGetHashSize(pSignature->enmDigest);
-    AssertReturn(pSignature->pIndData->DigestInfo.Digest.Asn1Core.cb == cbHash, VERR_INTERNAL_ERROR_5);
-
     /*
      * Allocate a temporary memory buffer.
      * Note! The _4K that gets subtracted is to avoid that the 16-byte heap
      *       block header in ring-0 (iprt) caused any unnecessary internal
      *       heap fragmentation.
      */
-#ifdef IN_RING0
+# ifdef IN_RING0
     uint32_t    cbScratch = _256K - _4K;
-#else
+# else
     uint32_t    cbScratch = _1M;
-#endif
+# endif
     void       *pvScratch = RTMemTmpAlloc(cbScratch);
     if (!pvScratch)
     {
@@ -2834,46 +3071,26 @@ static int rtldrPE_VerifySignatureValidateHash(PRTLDRMODPE pModPe, PRTLDRPESIGNA
     }
 
     /*
-     * Calculate and compare the full image hash.
+     * Verify signatures.
      */
-    int rc = rtldrPE_HashImageCommon(pModPe, pvScratch, cbScratch, pSignature->enmDigest,
-                                     &pSignature->HashCtx, &pSignature->HashRes, pErrInfo);
+    /* Image hashes: */
+    int rc = rtldrPE_VerifySignatureValidateOneImageHash(pModPe, pSignature, &pSignature->Primary,
+                                                         pvScratch, cbScratch, pErrInfo);
+    for (unsigned i = 0; i < pSignature->cNested && RT_SUCCESS(rc); i++)
+        rc = rtldrPE_VerifySignatureValidateOneImageHash(pModPe, pSignature, &pSignature->paNested[i],
+                                                         pvScratch, cbScratch, pErrInfo);
+
+    /* Page hashes: */
     if (RT_SUCCESS(rc))
     {
-        if (!memcmp(&pSignature->HashRes, pSignature->pIndData->DigestInfo.Digest.Asn1Core.uData.pv, cbHash))
-        {
-            /*
-             * Compare the page hashes if present.
-             *
-             * Seems the difference between V1 and V2 page hash attributes is
-             * that v1 uses SHA-1 while v2 uses SHA-256. The data structures
-             * seems to be identical otherwise.  Initially we assumed the digest
-             * algorithm was supposed to be RTCRSPCINDIRECTDATACONTENT::DigestInfo,
-             * i.e. the same as for the whole image hash.  The initial approach
-             * worked just fine, but this makes more sense.
-             *
-             * (See also comments in osslsigncode.c (google it).)
-             */
-            PCRTCRSPCSERIALIZEDOBJECTATTRIBUTE pAttrib;
-            pAttrib = RTCrSpcIndirectDataContent_GetPeImageObjAttrib(pSignature->pIndData,
-                                                                     RTCRSPCSERIALIZEDOBJECTATTRIBUTETYPE_PAGE_HASHES_V2);
-            if (pAttrib)
-                rc = rtldrPE_VerifyAllPageHashes(pModPe, pAttrib, RTDIGESTTYPE_SHA256, pvScratch, cbScratch, pErrInfo);
-            else
-            {
-                pAttrib = RTCrSpcIndirectDataContent_GetPeImageObjAttrib(pSignature->pIndData,
-                                                                         RTCRSPCSERIALIZEDOBJECTATTRIBUTETYPE_PAGE_HASHES_V1);
-                if (pAttrib)
-                    rc = rtldrPE_VerifyAllPageHashes(pModPe, pAttrib, RTDIGESTTYPE_SHA1, pvScratch, cbScratch, pErrInfo);
-            }
-        }
-        else
-            rc = RTErrInfoSetF(pErrInfo, VERR_LDRVI_IMAGE_HASH_MISMATCH,
-                               "Full image signature mismatch: %.*Rhxs, expected %.*Rhxs",
-                               cbHash, &pSignature->HashRes,
-                               cbHash, pSignature->pIndData->DigestInfo.Digest.Asn1Core.uData.pv);
+        rc = rtldrPE_VerifySignatureValidateOnePageHashes(pModPe, &pSignature->Primary, pvScratch, cbScratch, pErrInfo);
+        for (unsigned i = 0; i < pSignature->cNested && RT_SUCCESS(rc); i++)
+            rc = rtldrPE_VerifySignatureValidateOnePageHashes(pModPe, &pSignature->paNested[i], pvScratch, cbScratch, pErrInfo);
     }
 
+    /*
+     * Ditch the scratch buffer.
+     */
     RTMemTmpFree(pvScratch);
     return rc;
 }
@@ -2900,10 +3117,32 @@ static DECLCALLBACK(int) rtldrPE_VerifySignature(PRTLDRMODINTERNAL pMod, PFNRTLD
                 rc = rtldrPE_VerifySignatureValidateHash(pModPe, pSignature, pErrInfo);
             if (RT_SUCCESS(rc))
             {
-                rc = pfnCallback(&pModPe->Core, RTLDRSIGNATURETYPE_PKCS7_SIGNED_DATA,
-                                 &pSignature->ContentInfo, sizeof(pSignature->ContentInfo),
-                                 NULL /*pvExternalData*/, 0 /*cbExternalData*/,
-                                 pErrInfo, pvUser);
+                /*
+                 * Work the callback.
+                 */
+                /* The primary signature: */
+                RTLDRSIGNATUREINFO Info;
+                Info.iSignature     = 0;
+                Info.cSignatures    = (uint16_t)(1 + pSignature->cNested);
+                Info.enmType        = RTLDRSIGNATURETYPE_PKCS7_SIGNED_DATA;
+                Info.pvSignature    = pSignature->Primary.pContentInfo;
+                Info.cbSignature    = sizeof(*pSignature->Primary.pContentInfo);
+                Info.pvExternalData = NULL;
+                Info.cbExternalData = 0;
+                rc = pfnCallback(&pModPe->Core, &Info, pErrInfo, pvUser);
+
+                /* The nested signatures: */
+                for (uint32_t iNested = 0; iNested < pSignature->cNested && rc == VINF_SUCCESS; iNested++)
+                {
+                    Info.iSignature     = (uint16_t)(1 + iNested);
+                    Info.cSignatures    = (uint16_t)(1 + pSignature->cNested);
+                    Info.enmType        = RTLDRSIGNATURETYPE_PKCS7_SIGNED_DATA;
+                    Info.pvSignature    = pSignature->paNested[iNested].pContentInfo;
+                    Info.cbSignature    = sizeof(*pSignature->paNested[iNested].pContentInfo);
+                    Info.pvExternalData = NULL;
+                    Info.cbExternalData = 0;
+                    rc = pfnCallback(&pModPe->Core, &Info, pErrInfo, pvUser);
+                }
             }
             rtldrPE_VerifySignatureDestroy(pModPe, pSignature);
         }
@@ -3585,10 +3824,17 @@ static void rtldrPEConvert32BitLoadConfigTo64Bit(PIMAGE_LOAD_CONFIG_DIRECTORY64 
     /*
      * volatile everywhere! Trying to prevent the compiler being a smarta$$ and reorder stuff.
      */
-    IMAGE_LOAD_CONFIG_DIRECTORY32_V9 volatile *pLoadCfg32 = (IMAGE_LOAD_CONFIG_DIRECTORY32_V9 volatile *)pLoadCfg;
-    IMAGE_LOAD_CONFIG_DIRECTORY64_V9 volatile *pLoadCfg64 = pLoadCfg;
+    IMAGE_LOAD_CONFIG_DIRECTORY32_V12 volatile *pLoadCfg32 = (IMAGE_LOAD_CONFIG_DIRECTORY32_V12 volatile *)pLoadCfg;
+    IMAGE_LOAD_CONFIG_DIRECTORY64_V12 volatile *pLoadCfg64 = pLoadCfg;
 
-    pLoadCfg64->AddressOfSomeUnicodeString      = pLoadCfg32->AddressOfSomeUnicodeString;
+    pLoadCfg64->GuardXFGTableDispatchFunctionPointer = pLoadCfg32->GuardXFGTableDispatchFunctionPointer;
+    pLoadCfg64->GuardXFGDispatchFunctionPointer = pLoadCfg32->GuardXFGDispatchFunctionPointer;
+    pLoadCfg64->GuardXFGCheckFunctionPointer    = pLoadCfg32->GuardXFGCheckFunctionPointer;
+    pLoadCfg64->GuardEHContinuationCount        = pLoadCfg32->GuardEHContinuationCount;
+    pLoadCfg64->GuardEHContinuationTable        = pLoadCfg32->GuardEHContinuationTable;
+    pLoadCfg64->VolatileMetadataPointer         = pLoadCfg32->VolatileMetadataPointer;
+    pLoadCfg64->EnclaveConfigurationPointer     = pLoadCfg32->EnclaveConfigurationPointer;
+    pLoadCfg64->Reserved3                       = pLoadCfg32->Reserved3;
     pLoadCfg64->HotPatchTableOffset             = pLoadCfg32->HotPatchTableOffset;
     pLoadCfg64->GuardRFVerifyStackPointerFunctionPointer = pLoadCfg32->GuardRFVerifyStackPointerFunctionPointer;
     pLoadCfg64->Reserved2                       = pLoadCfg32->Reserved2;
@@ -4208,6 +4454,15 @@ static int rtldrPEValidateDirectoriesAndRememberStuff(PRTLDRMODPE pModPe, const 
     IMAGE_DATA_DIRECTORY Dir = pOptHdr->DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
     if (Dir.Size)
     {
+        const size_t cbExpectV12 = !pModPe->f64Bit
+                                 ? sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32_V12)
+                                 : sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64_V12);
+        const size_t cbExpectV11 = !pModPe->f64Bit
+                                 ? sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32_V11)
+                                 : sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64_V11);
+        const size_t cbExpectV10 = !pModPe->f64Bit
+                                 ? sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32_V10)
+                                 : sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64_V10);
         const size_t cbExpectV9 = !pModPe->f64Bit
                                 ? sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32_V9)
                                 : sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64_V9);
@@ -4236,10 +4491,13 @@ static int rtldrPEValidateDirectoriesAndRememberStuff(PRTLDRMODPE pModPe, const 
                                 ? sizeof(IMAGE_LOAD_CONFIG_DIRECTORY32_V1)
                                 : sizeof(IMAGE_LOAD_CONFIG_DIRECTORY64_V2) /*No V1*/;
         const size_t cbNewHack  = cbExpectV5; /* Playing safe here since there might've been revisions between V5 and V6 we don't know about . */
-        const size_t cbMaxKnown = cbExpectV9;
+        const size_t cbMaxKnown = cbExpectV12;
 
         bool fNewerStructureHack = false;
-        if (   Dir.Size != cbExpectV9
+        if (   Dir.Size != cbExpectV12
+            && Dir.Size != cbExpectV11
+            && Dir.Size != cbExpectV10
+            && Dir.Size != cbExpectV9
             && Dir.Size != cbExpectV8
             && Dir.Size != cbExpectV7
             && Dir.Size != cbExpectV6
@@ -4251,13 +4509,13 @@ static int rtldrPEValidateDirectoriesAndRememberStuff(PRTLDRMODPE pModPe, const 
         {
             fNewerStructureHack = Dir.Size > cbNewHack /* These structure changes are slowly getting to us! More futher down. */
                                && Dir.Size <= sizeof(u);
-            Log(("rtldrPEOpen: %s: load cfg dir: unexpected dir size of %u bytes, expected %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu.%s\n",
-                 pszLogName, Dir.Size, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1,
+            Log(("rtldrPEOpen: %s: load cfg dir: unexpected dir size of %u bytes, expected %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu.%s\n",
+                 pszLogName, Dir.Size, cbExpectV12, cbExpectV11, cbExpectV10, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1,
                  fNewerStructureHack ? " Will try ignore extra bytes if all zero." : ""));
             if (!fNewerStructureHack)
                 return RTErrInfoSetF(pErrInfo, VERR_LDRPE_LOAD_CONFIG_SIZE,
-                                     "Unexpected load config dir size of %u bytes; supported sized: %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu",
-                                     Dir.Size, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1);
+                                     "Unexpected load config dir size of %u bytes; supported sized: %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu",
+                                     Dir.Size, cbExpectV12, cbExpectV11, cbExpectV10, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1);
         }
 
         /*
@@ -4296,7 +4554,10 @@ static int rtldrPEValidateDirectoriesAndRememberStuff(PRTLDRMODPE pModPe, const 
             }
             /* Kludge #2: This happens a lot. Structure changes, but the linker doesn't get
                updated and stores some old size in the directory.  Use the header size. */
-            else if (   u.Cfg64.Size == cbExpectV9
+            else if (   u.Cfg64.Size == cbExpectV12
+                     || u.Cfg64.Size == cbExpectV11
+                     || u.Cfg64.Size == cbExpectV10
+                     || u.Cfg64.Size == cbExpectV9
                      || u.Cfg64.Size == cbExpectV8
                      || u.Cfg64.Size == cbExpectV7
                      || u.Cfg64.Size == cbExpectV6
@@ -4334,11 +4595,11 @@ static int rtldrPEValidateDirectoriesAndRememberStuff(PRTLDRMODPE pModPe, const 
             }
             else
             {
-                Log(("rtldrPEOpen: %s: load cfg hdr: unexpected hdr size of %u bytes (dir %u), expected %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu.\n",
-                     pszLogName, u.Cfg64.Size, Dir.Size, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1));
+                Log(("rtldrPEOpen: %s: load cfg hdr: unexpected hdr size of %u bytes (dir %u), expected %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu.\n",
+                     pszLogName, u.Cfg64.Size, Dir.Size, cbExpectV12, cbExpectV11, cbExpectV10, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1));
                 return RTErrInfoSetF(pErrInfo, VERR_LDRPE_LOAD_CONFIG_SIZE,
-                                     "Unexpected load config header size of %u bytes (dir %u); supported sized: %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu",
-                                     u.Cfg64.Size, Dir.Size, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1);
+                                     "Unexpected load config header size of %u bytes (dir %u); supported sized: %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, %zu, or %zu",
+                                     u.Cfg64.Size, Dir.Size, cbExpectV12, cbExpectV11, cbExpectV10, cbExpectV9, cbExpectV8, cbExpectV7, cbExpectV6, cbExpectV5, cbExpectV4, cbExpectV3, cbExpectV2, cbExpectV1);
             }
         }
         if (u.Cfg64.LockPrefixTable && !(fFlags & (RTLDR_O_FOR_DEBUG | RTLDR_O_FOR_VALIDATION)))

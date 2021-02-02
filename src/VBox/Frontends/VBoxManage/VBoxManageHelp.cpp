@@ -478,7 +478,11 @@ void printUsage(USAGECATEGORY enmCommand, uint64_t fSubcommandScope, PRTSTREAM p
                      "                            hostinfo|hostcpuids|hddbackends|hdds|dvds|floppies|\n"
                      "                            usbhost|usbfilters|systemproperties|extpacks|\n"
                      "                            groups|webcams|screenshotformats|cloudproviders|\n"
+#if defined(VBOX_WITH_CLOUD_NET)
+                     "                            cloudprofiles|cloudnets\n"
+#else
                      "                            cloudprofiles\n"
+#endif
                      "\n", SEP);
 
     if (enmCommand == USAGE_SHOWVMINFO || enmCommand == USAGE_S_ALL)
@@ -1135,22 +1139,6 @@ void printUsage(USAGECATEGORY enmCommand, uint64_t fSubcommandScope, PRTSTREAM p
             RTStrmPrintf(pStrm,
                                "%s usbfilter %s       remove <index,0-N>\n"
                          "                            --target <uuid|vmname>|global\n"
-                         "\n", SEP);
-    }
-
-    if (enmCommand == USAGE_SHAREDFOLDER || enmCommand == USAGE_S_ALL)
-    {
-        if (fSubcommandScope & HELP_SCOPE_SHAREDFOLDER_ADD)
-            RTStrmPrintf(pStrm,
-                               "%s sharedfolder %s    add <uuid|vmname>\n"
-                         "                            --name <name> --hostpath <hostpath>\n"
-                         "                            [--transient] [--readonly] [--automount]\n"
-                         "\n", SEP);
-
-        if (fSubcommandScope & HELP_SCOPE_SHAREDFOLDER_REMOVE)
-            RTStrmPrintf(pStrm,
-                               "%s sharedfolder %s    remove <uuid|vmname>\n"
-                         "                            --name <name> [--transient]\n"
                          "\n", SEP);
     }
 

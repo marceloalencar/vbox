@@ -142,6 +142,12 @@ static DECLCALLBACK(int) pdmR3DevHlp_MmioCreateEx(PPDMDEVINS pDevIns, RTGCPHYS c
     VM_ASSERT_EMT0_RETURN(pVM, VERR_VM_THREAD_NOT_EMT);
     VM_ASSERT_STATE_RETURN(pVM, VMSTATE_CREATING, VERR_VM_INVALID_VM_STATE);
 
+    if (pDevIns->iInstance > 0)
+    {
+        pszDesc = MMR3HeapAPrintf(pVM, MM_TAG_PDM_DEVICE_DESC, "%s [%u]", pszDesc, pDevIns->iInstance);
+        AssertReturn(pszDesc, VERR_NO_STR_MEMORY);
+    }
+
     /* HACK ALERT! Round the size up to page size.  The PCI bus should do something similar before mapping it. */
     /** @todo It's possible we need to do dummy MMIO fill-in of the PCI bus or
      *        guest adds more alignment to an region. */
@@ -2788,7 +2794,7 @@ static DECLCALLBACK(int) pdmR3DevHlp_DMARegister(PPDMDEVINS pDevIns, unsigned uC
              pDevIns->pReg->szName, pDevIns->iInstance, uChannel, pfnTransferHandler, pvUser));
     int rc = VINF_SUCCESS;
     if (pVM->pdm.s.pDmac)
-        pVM->pdm.s.pDmac->Reg.pfnRegister(pVM->pdm.s.pDmac->pDevIns, uChannel, pfnTransferHandler, pvUser);
+        pVM->pdm.s.pDmac->Reg.pfnRegister(pVM->pdm.s.pDmac->pDevIns, uChannel, pDevIns, pfnTransferHandler, pvUser);
     else
     {
         AssertMsgFailed(("Configuration error: No DMAC controller available. This could be related to init order too!\n"));

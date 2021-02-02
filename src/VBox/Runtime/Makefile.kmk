@@ -297,9 +297,8 @@ ifdef IPRT_WITH_FUTEX_BASED_SEMS
 endif
 RuntimeR3_INCS          = \
 	include \
-	$(SDK_VBOX_ZLIB_INCS)
-RuntimeR3_INCS         += \
-	$(PATH_ROOT)/src/libs/liblzf-3.4
+	$(SDK_VBOX_ZLIB_INCS) \
+	$(SDK_VBOX_LZF_INCS)
 
 # RuntimeR3_INCS.solaris  = \
 #    /usr/include
@@ -532,6 +531,7 @@ RuntimeR3_SOURCES       = \
 	common/path/RTPathExt.cpp \
 	common/path/RTPathFilename.cpp \
 	common/path/RTPathFilenameUtf16.cpp \
+	common/path/RTPathFindCommon.cpp \
 	common/path/RTPathGlob.cpp \
 	common/path/RTPathHasExt.cpp \
 	common/path/RTPathHasPath.cpp \
@@ -578,6 +578,7 @@ RuntimeR3_SOURCES       = \
 	common/string/RTStrIStartsWith.cpp \
 	common/string/RTStrICmpAscii.cpp \
 	common/string/RTStrNICmpAscii.cpp \
+	common/string/RTStrSplit.cpp \
 	common/string/RTStrStr.cpp \
 	common/string/RTUtf16Copy.cpp \
 	common/string/RTUtf16CopyAscii.cpp \
@@ -952,7 +953,6 @@ RuntimeR3_SOURCES.linux = \
 	r3/generic/RTLocaleQueryLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryNormalizedBaseLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryUserCountryCode-r3-generic.cpp \
-	r3/generic/RTTimeZoneGetCurrent-generic.cpp \
 	r3/generic/dirrel-r3-generic.cpp \
 	r3/posix/allocex-r3-posix.cpp \
 	r3/linux/RTThreadGetNativeState-linux.cpp \
@@ -979,6 +979,7 @@ RuntimeR3_SOURCES.linux = \
 	r3/linux/systemmem-linux.cpp \
 	r3/posix/RTTimeNow-posix.cpp \
 	r3/posix/RTTimeSet-posix.cpp \
+	r3/posix/RTTimeZoneGetCurrent-posix.cpp \
 	r3/posix/rtmempage-exec-mmap-heap-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
@@ -1167,7 +1168,6 @@ RuntimeR3_SOURCES.darwin = \
 	r3/generic/RTLocaleQueryLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryNormalizedBaseLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryUserCountryCode-r3-generic.cpp \
-	r3/generic/RTTimeZoneGetCurrent-generic.cpp \
 	r3/generic/dirrel-r3-generic.cpp \
 	r3/posix/RTFileQueryFsSizes-posix.cpp \
 	r3/posix/RTHandleGetStandard-posix.cpp \
@@ -1175,6 +1175,7 @@ RuntimeR3_SOURCES.darwin = \
 	r3/posix/RTPathUserHome-posix.cpp \
 	r3/posix/RTSystemQueryOSInfo-posix.cpp \
 	r3/posix/RTTimeSet-posix.cpp \
+	r3/posix/RTTimeZoneGetCurrent-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
 	r3/posix/errvars-posix.cpp \
@@ -1252,7 +1253,6 @@ RuntimeR3_SOURCES.freebsd = \
 	r3/generic/RTLocaleQueryLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryNormalizedBaseLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryUserCountryCode-r3-generic.cpp \
-	r3/generic/RTTimeZoneGetCurrent-generic.cpp \
 	r3/generic/dirrel-r3-generic.cpp \
 	r3/posix/RTFileQueryFsSizes-posix.cpp \
 	r3/posix/RTHandleGetStandard-posix.cpp \
@@ -1261,6 +1261,7 @@ RuntimeR3_SOURCES.freebsd = \
 	r3/posix/RTSystemQueryOSInfo-posix.cpp \
 	r3/posix/RTTimeNow-posix.cpp \
 	r3/posix/RTTimeSet-posix.cpp \
+	r3/posix/RTTimeZoneGetCurrent-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
 	r3/posix/errvars-posix.cpp \
@@ -1334,7 +1335,6 @@ RuntimeR3_SOURCES.netbsd = \
 	r3/generic/RTLocaleQueryLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryNormalizedBaseLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryUserCountryCode-r3-generic.cpp \
-	r3/generic/RTTimeZoneGetCurrent-generic.cpp \
 	r3/generic/dirrel-r3-generic.cpp \
 	r3/posix/RTFileQueryFsSizes-posix.cpp \
 	r3/posix/RTFileSetAllocationSize-posix.cpp \
@@ -1345,6 +1345,7 @@ RuntimeR3_SOURCES.netbsd = \
 	r3/posix/RTSystemQueryTotalRam-posix.cpp \
 	r3/posix/RTTimeNow-posix.cpp \
 	r3/posix/RTTimeSet-posix.cpp \
+	r3/posix/RTTimeZoneGetCurrent-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
 	r3/posix/errvars-posix.cpp \
@@ -1410,7 +1411,6 @@ RuntimeR3_SOURCES.solaris = \
 	r3/generic/RTLocaleQueryLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryNormalizedBaseLocaleName-r3-generic.cpp \
 	r3/generic/RTLocaleQueryUserCountryCode-r3-generic.cpp \
-	r3/generic/RTTimeZoneGetCurrent-generic.cpp \
 	r3/generic/dirrel-r3-generic.cpp \
 	r3/posix/RTFileQueryFsSizes-posix.cpp \
 	r3/posix/RTFileSetAllocationSize-posix.cpp \
@@ -1420,6 +1420,7 @@ RuntimeR3_SOURCES.solaris = \
 	r3/posix/RTSystemQueryOSInfo-posix.cpp \
 	r3/posix/RTTimeNow-posix.cpp \
 	r3/posix/RTTimeSet-posix.cpp \
+	r3/posix/RTTimeZoneGetCurrent-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
 	r3/posix/errvars-posix.cpp \
@@ -2204,7 +2205,7 @@ VBoxRT_INCS                   := $(RuntimeR3_INCS)
 VBoxRT_INCS.$(KBUILD_TARGET)  := $(RuntimeR3_INCS.$(KBUILD_TARGET))
 VBoxRT_INCS.$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH) := $(RuntimeR3_INCS.$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH))
 VBoxRT_LIBS                    = \
-	$(PATH_STAGE_LIB)/VBox-liblzf$(VBOX_SUFF_LIB)
+	$(SDK_VBOX_LZF_LIBS)
 if1of ($(KBUILD_TARGET_ARCH), amd64 x86)
 VBoxRT_LIBS                   += \
 	$(PATH_STAGE_LIB)/SUPR3$(VBOX_SUFF_LIB)
@@ -2351,7 +2352,7 @@ endif
 VBoxRT-x86_SDKS  += VBOX_OPENSSL-x86
 
 VBoxRT-x86_LIBS = \
-	$(PATH_STAGE_LIB)/VBox-liblzf-x86$(VBOX_SUFF_LIB)
+	$(SDK_VBOX_LZF_LIBS-x86)
 if1of ($(KBUILD_TARGET_ARCH), amd64 x86)
 VBoxRT-x86_LIBS += \
 	$(PATH_STAGE_LIB)/SUPR3-x86$(VBOX_SUFF_LIB)
@@ -3009,7 +3010,8 @@ RuntimeR0Drv_SOURCES.win = \
 
 RuntimeR0Drv_SOURCES.win.amd64 := $(RuntimeWin64ASM_SOURCES)
 RuntimeR0Drv_SOURCES.win.x86   := $(RuntimeWin32ASM_SOURCES) \
-	r0drv/nt/nt3fakes-stub-r0drv-nt.cpp
+	r0drv/nt/nt3fakes-stub-r0drv-nt.cpp \
+	r0drv/nt/alloca-x86-r0drv-nt.asm
 
 
 RuntimeR0Drv_SOURCES.darwin = \
